@@ -9,14 +9,12 @@ const inter = Inter({
   weight: ["400", "500", "600"],
   display: "swap",
 });
-
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
   subsets: ["latin"],
   weight: ["400", "500"],
   display: "swap",
 });
-
 const dmSerifDisplay = DM_Serif_Display({
   variable: "--font-dm-serif-display",
   subsets: ["latin"],
