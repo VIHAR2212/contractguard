@@ -1,32 +1,37 @@
 // ===========================================================================
 // /lib/groq/sector-pipeline.ts
 // ---------------------------------------------------------------------------
-// Extract → Match → Explain pipeline using the Groq SDK.
+// DEEP RESEARCH pipeline using Groq SDK + Supabase rulebook context.
 //
-// **Multi-key architecture**: ContractGuard uses THREE Groq accounts — one
-// per sector. The right API key + model is selected based on the user's
-// chosen sector, so you can spread load across free-tier accounts and
-// pick a different model per document type.
-//
-// Env vars (one set per sector):
-//   GROQ_API_KEY_CONSTRUCTION  +  GROQ_MODEL_CONSTRUCTION  +  GROQ_VISION_MODEL_CONSTRUCTION
-//   GROQ_API_KEY_FINANCE       +  GROQ_MODEL_FINANCE       +  GROQ_VISION_MODEL_FINANCE
-//   GROQ_API_KEY_GIG_JOB       +  GROQ_MODEL_GIG_JOB       +  GROQ_VISION_MODEL_GIG_JOB
-//
-// Fallback: if the sector-specific key is missing, we try a generic
-// GROQ_API_KEY (handy for local dev with a single key). If that's also
-// missing, the deterministic keyword matcher runs so the demo still works.
+// What makes this "deep":
+//   1. Loads full-text rulebooks (RERA Act, RBI Master Directions, BIS
+//      Regulations, etc.) from Supabase and injects them into the prompt
+//      so the AI reads the actual statutory text, not just pattern descriptions.
+//   2. For every matched clause, the AI must:
+//      - Extract the exact charge / cost / fee mentioned
+//      - Validate it against the cited statute (valid / invalid / partial)
+//      - State what the law actually permits
+//      - Produce a 1-2 sentence "summarized reason" — the line that silences
+//        any lawyer or fraud
+//      - Produce a ready-to-use counter-argument the user can paste back
+//      - Cite specific section numbers
+//      - Rate the precedent strength (statutory / binding / persuasive / regulatory)
+//   3. Merges local rules + Supabase rules (Supabase overrides on ID collision)
+//   4. Uses three Groq accounts (one per sector) for load balancing
 // ===========================================================================
 
 import Groq from "groq-sdk";
 import type {
+  ChargeValidity,
   DocLanguage,
   MatchedClause,
+  PrecedentStrength,
   Rule,
   Sector,
   Severity,
 } from "@/lib/types";
-import { getRulesForSector } from "@/lib/rules";
+import { loadRulesForSector } from "@/lib/supabase/rules-loader";
+import { loadRulebooksForSector, type RulebookDoc } from "@/lib/supabase/rulebooks";
 import type { ParsedDocument } from "@/lib/parsers";
 
 // ---------------------------------------------------------------------------
@@ -45,8 +50,9 @@ export interface SectorPipelineResult {
   pipelineMs: number;
   roadmapNote?: string;
   usedFallback: boolean;
-  /** Which Groq account / key was actually used (for logs, not PII). */
   keySource: "construction" | "finance" | "gig_job" | "generic" | "none";
+  rulesFromSupabase: number;
+  rulebooksInjected: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,14 +72,13 @@ export function computeRiskScore(clauses: MatchedClause[]): number {
 }
 
 // ---------------------------------------------------------------------------
-// Per-sector env config
+// Per-sector Groq config (three accounts)
 // ---------------------------------------------------------------------------
 
 interface SectorConfig {
   apiKey: string | undefined;
   textModel: string;
   visionModel: string;
-  /** Which env slot the key came from — surfaced in pipeline result. */
   keySource: "construction" | "finance" | "gig_job" | "generic" | "none";
 }
 
@@ -81,10 +86,7 @@ const DEFAULT_TEXT_MODEL = "llama-3.3-70b-versatile";
 const DEFAULT_VISION_MODEL = "llama-3.2-90b-vision-preview";
 
 function getSectorConfig(sector: Sector): SectorConfig {
-  // Sector-specific env var names. GIG_JOB uses underscore to match
-  // conventional env-var naming (GROQ_API_KEY_GIG_JOB).
-  const sectorKey = sector.toUpperCase().replace("-", "_"); // CONSTRUCTION | FINANCE | GIG_JOB
-
+  const sectorKey = sector.toUpperCase().replace("-", "_");
   const sectorApiKey = process.env[`GROQ_API_KEY_${sectorKey}`];
   const sectorTextModel =
     process.env[`GROQ_MODEL_${sectorKey}`] || DEFAULT_TEXT_MODEL;
@@ -100,7 +102,6 @@ function getSectorConfig(sector: Sector): SectorConfig {
     };
   }
 
-  // Fallback: generic GROQ_API_KEY (for local dev with a single key)
   const genericKey = process.env.GROQ_API_KEY;
   if (genericKey) {
     return {
@@ -111,7 +112,6 @@ function getSectorConfig(sector: Sector): SectorConfig {
     };
   }
 
-  // No key at all — keyword fallback will run
   return {
     apiKey: undefined,
     textModel: sectorTextModel,
@@ -120,9 +120,6 @@ function getSectorConfig(sector: Sector): SectorConfig {
   };
 }
 
-// Cache one Groq client per API key so we don't re-instantiate on every call
-// (the SDK does connection pooling internally; we just want to avoid the
-// constructor overhead).
 const _groqClients = new Map<string, Groq>();
 
 function getGroq(apiKey: string): Groq {
@@ -135,7 +132,7 @@ function getGroq(apiKey: string): Groq {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: the JSON schema we ask the model to emit
+// Model output schema
 // ---------------------------------------------------------------------------
 
 interface RawModelMatch {
@@ -143,47 +140,118 @@ interface RawModelMatch {
   snippet: string;
   confidence: "high" | "medium" | "low";
   notes?: string;
+  chargeValidity: ChargeValidity;
+  chargeExtracted?: string;
+  permittedCharge?: string;
+  chargeAnalysisEn: string;
+  chargeAnalysisHi: string;
+  summarizedReasonEn: string;
+  summarizedReasonHi: string;
+  counterArgumentEn: string;
+  counterArgumentHi: string;
+  precedentStrength: PrecedentStrength;
+  citedSections: string[];
 }
 
 // ---------------------------------------------------------------------------
-// Prompt construction — TEXT path
+// Prompt construction
 // ---------------------------------------------------------------------------
 
-function buildTextSystemPrompt(rules: Rule[], sector: Sector): string {
-  const rulesDigest = rules
-    .map(
-      (r) =>
-        `- id: ${r.id}\n  category: ${r.category}\n  severity: ${r.severity}\n  legal_basis: ${r.legal_basis}\n  pattern: ${r.pattern_description_en}`
-    )
+function buildRulesDigest(rules: Rule[]): string {
+  return rules
+    .map((r) => {
+      const chargeInfo = r.involvesChargeValidation
+        ? `\n  involves_charge_validation: true\n  charge_validation_criteria: ${r.chargeValidationCriteria ?? "N/A"}\n  permitted_charge: ${r.permittedCharge ?? "N/A"}`
+        : "";
+      return `- id: ${r.id}\n  category: ${r.category}\n  severity: ${r.severity}\n  legal_basis: ${r.legal_basis}\n  pattern: ${r.pattern_description_en}${chargeInfo}`;
+    })
     .join("\n");
+}
 
-  return `You are ContractGuard, a strict legal-clause matching engine for Indian consumer contracts.
-Your job: read the user's contract text and identify every clause that matches one of the rules in the supplied RULES list.
-You must ONLY match rules that appear in the RULES list — never invent a rule, never invent a legal basis, never invent a statute.
-For every match you must quote the EXACT text snippet from the contract that triggered the match (no paraphrasing, must be a verbatim substring of the contract text).
+function buildRulebooksContext(rulebooks: RulebookDoc[]): string {
+  if (rulebooks.length === 0) {
+    return "No full-text rulebooks available. Rely on the legal_basis field of each rule.";
+  }
+  return rulebooks
+    .map(
+      (rb, i) =>
+        `--- RULEBOOK ${i + 1}: ${rb.title} ---\n${rb.content}\n--- END RULEBOOK ${i + 1} ---`
+    )
+    .join("\n\n");
+}
+
+function buildTextSystemPrompt(
+  rules: Rule[],
+  sector: Sector,
+  rulebooks: RulebookDoc[]
+): string {
+  const rulesDigest = buildRulesDigest(rules);
+  const rulebooksContext = buildRulebooksContext(rulebooks);
+
+  return `You are ContractGuard, India's most rigorous legal-clause matching engine for consumer contracts. You are the last line of defence against builders, banks, and employers who insert illegal clauses into agreements.
+
+Your job: read the user's contract text and identify every clause that matches one of the rules in the supplied RULES list. For every match, you must produce a DEEP LEGAL ANALYSIS that is specific enough to silence any lawyer or fraud.
 
 SECTOR: ${sector}
 
-RULES (id | category | severity | legal_basis | pattern):
- ${rulesDigest}
+== RULES (id | category | severity | legal_basis | pattern | charge info) ==
+${rulesDigest}
 
-OUTPUT FORMAT — return ONLY a JSON object, no prose, no markdown fences:
+== FULL-TEXT RULEBOOKS (actual statutory text — read these before matching) ==
+${rulebooksContext}
+
+== OUTPUT FORMAT — return ONLY a JSON object, no prose, no markdown fences ==
 {
   "matches": [
-    { "ruleId": "<must be one of the ids above>", "snippet": "<verbatim text from the contract>", "confidence": "high|medium|low", "notes": "<optional short note>" }
+    {
+      "ruleId": "<must be one of the ids above>",
+      "snippet": "<verbatim text from the contract, max 400 chars>",
+      "confidence": "high|medium|low",
+      "notes": "<optional short note>",
+
+      "chargeValidity": "valid|invalid|partially_valid|not_applicable",
+      "chargeExtracted": "<the exact charge/cost/fee mentioned in the clause, e.g. '25% of total consideration' or 'Rs. 5 per sq.ft. per month' or '4% prepayment penalty'>",
+      "permittedCharge": "<what the law actually permits, e.g. 'max 10% of booking amount' or '0% — prohibited by RBI circular' or 'actuals only, must be in KFS'>",
+      "chargeAnalysisEn": "<2-4 sentences explaining WHY the charge is valid/invalid, citing the specific statute section and the reasoning. Be specific.>",
+      "chargeAnalysisHi": "<same analysis in Hindi (Devanagari)>",
+      "summarizedReasonEn": "<1-2 sentences. The single most powerful line. This is what the user reads to understand the issue.>",
+      "summarizedReasonHi": "<same in Hindi>",
+      "counterArgumentEn": "<a ready-to-use statement the user can copy-paste and send to the builder/bank/employer. Must be firm, cite the specific section, and demand the correction.>",
+      "counterArgumentHi": "<same counter-argument in Hindi>",
+      "precedentStrength": "statutory|binding|persuasive|regulatory",
+      "citedSections": ["<specific section numbers, e.g. 'Section 18(1)', 'Pioneer Urban Land (2019) 8 SCC 473'>"]
+    }
   ],
-  "roadmapNote": "<optional — only if the contract was not in English/Hindi/Hinglish and you had to translate internally; otherwise omit>"
+  "roadmapNote": "<optional — only if the contract was not in English/Hindi/Hinglish>"
 }
 
-RULES OF THE GAME:
-1. If a clause does not clearly match a rule, do NOT match it. Precision over recall.
-2. If the contract text is not in English/Hindi/Hinglish, translate the relevant snippet to English internally before matching, and add a roadmapNote describing the source language.
-3. Snippets must be at most 400 characters. If the triggering clause is longer, pick the most relevant 400-character window.
-4. Do not match the same rule twice with the same snippet. If the contract violates the same rule in multiple places, pick the strongest example.
-5. Return at most one match per rule id.`;
+== RULES OF THE GAME — READ CAREFULLY ==
+1. PRECISION OVER RECALL. Only match a clause if it CLEARLY matches a rule. Do not invent rules.
+2. CHARGE VALIDATION IS MANDATORY for rules where involves_charge_validation is true. You must:
+   a. Extract the exact charge/cost/fee from the clause (chargeExtracted)
+   b. State what the law permits (permittedCharge) — use the rule's permitted_charge field AND the full-text rulebooks
+   c. Classify as valid / invalid / partially_valid / not_applicable
+   d. Explain WHY in 2-4 sentences with the specific statutory reasoning (chargeAnalysisEn)
+3. THE SUMMARIZED REASON must be 1-2 sentences. It is the headline. Make it powerful and specific. No hedging.
+4. THE COUNTER-ARGUMENT must be a complete, ready-to-send statement. It must cite the specific section number and state the legal entitlement clearly. The user should be able to copy-paste it into an email to the builder/bank/employer.
+5. CITED SECTIONS must be specific. 'Section 18' is good. 'RERA' is bad. Include judgment citations where relevant (e.g. 'Pioneer Urban Land (2019) 8 SCC 473').
+6. PRECEDENT STRENGTH:
+   - 'statutory' = black-letter law (an Act passed by Parliament)
+   - 'binding' = Supreme Court judgment
+   - 'persuasive' = High Court judgment or tribunal order
+   - 'regulatory' = RBI / BIS / RERA circular or guideline
+7. READ THE FULL-TEXT RULEBOOKS. If a rulebook is provided, quote the actual statutory language in your chargeAnalysis. Do not paraphrase the statute — quote the key phrase.
+8. If the contract text is not in English/Hindi/Hinglish, translate internally to English before matching and add a roadmapNote.
+9. Snippets must be at most 400 characters, verbatim from the contract.
+10. Do not match the same rule twice with the same snippet.
+11. Return at most one match per rule id.
+12. If a clause does not involve a charge/cost, set chargeValidity to "not_applicable" and leave chargeExtracted/permittedCharge empty — but still fill in summarizedReasonEn, counterArgumentEn, citedSections, and precedentStrength.`;
 }
 
-function buildTextUserPrompt(parsed: ParsedDocument, docLanguage: DocLanguage): string {
+function buildTextUserPrompt(
+  parsed: ParsedDocument,
+  docLanguage: DocLanguage
+): string {
   const langHint =
     docLanguage === "en"
       ? "The document is in English."
@@ -193,23 +261,22 @@ function buildTextUserPrompt(parsed: ParsedDocument, docLanguage: DocLanguage): 
       ? "The document is in Hinglish (Roman-script Hindi)."
       : "The document language is not English/Hindi/Hinglish. Translate internally to English before matching and add a roadmapNote.";
 
-  const header = `DOCUMENT LANGUAGE: ${langHint}
+  return `DOCUMENT LANGUAGE: ${langHint}
 DOCUMENT FILENAME: ${parsed.filename}
 
 CONTRACT TEXT:
+"""
+${(parsed.text ?? "").slice(0, 60_000)}
 """`;
-  const footer = `"""`;
-  const text = (parsed.text ?? "").slice(0, 60_000);
-  return `${header}\n${text}\n${footer}`;
 }
 
-// ---------------------------------------------------------------------------
-// Prompt construction — VISION path (image upload)
-// ---------------------------------------------------------------------------
-
-function buildVisionSystemPrompt(rules: Rule[], sector: Sector): string {
+function buildVisionSystemPrompt(
+  rules: Rule[],
+  sector: Sector,
+  rulebooks: RulebookDoc[]
+): string {
   return (
-    buildTextSystemPrompt(rules, sector) +
+    buildTextSystemPrompt(rules, sector, rulebooks) +
     `\n\nADDITIONAL: The contract is provided as an IMAGE. Use OCR-like reading of the image to extract the contract text, then apply the same matching rules. If the image is illegible or not a contract, return {"matches": []} with a roadmapNote explaining the issue.`
   );
 }
@@ -223,18 +290,19 @@ async function callGroqText(
   rules: Rule[],
   sector: Sector,
   docLanguage: DocLanguage,
-  config: SectorConfig
+  config: SectorConfig,
+  rulebooks: RulebookDoc[]
 ): Promise<{ matches: RawModelMatch[]; roadmapNote?: string } | null> {
   if (!config.apiKey) return null;
   const groq = getGroq(config.apiKey);
 
-  const sys = buildTextSystemPrompt(rules, sector);
+  const sys = buildTextSystemPrompt(rules, sector, rulebooks);
   const user = buildTextUserPrompt(parsed, docLanguage);
 
   const resp = await groq.chat.completions.create({
     model: config.textModel,
     temperature: 0.1,
-    max_tokens: 2048,
+    max_tokens: 4096,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: sys },
@@ -248,9 +316,15 @@ async function callGroqText(
       matches?: RawModelMatch[];
       roadmapNote?: string;
     };
-    return { matches: parsedJson.matches ?? [], roadmapNote: parsedJson.roadmapNote };
+    return {
+      matches: parsedJson.matches ?? [],
+      roadmapNote: parsedJson.roadmapNote,
+    };
   } catch {
-    return { matches: [], roadmapNote: "Model returned invalid JSON — falling back." };
+    return {
+      matches: [],
+      roadmapNote: "Model returned invalid JSON — falling back.",
+    };
   }
 }
 
@@ -263,13 +337,14 @@ async function callGroqVision(
   rules: Rule[],
   sector: Sector,
   docLanguage: DocLanguage,
-  config: SectorConfig
+  config: SectorConfig,
+  rulebooks: RulebookDoc[]
 ): Promise<{ matches: RawModelMatch[]; roadmapNote?: string } | null> {
   if (!config.apiKey) return null;
   if (!parsed.base64 || !parsed.mediaType) return null;
   const groq = getGroq(config.apiKey);
 
-  const sys = buildVisionSystemPrompt(rules, sector);
+  const sys = buildVisionSystemPrompt(rules, sector, rulebooks);
   const langHint =
     docLanguage === "en"
       ? "The document is in English."
@@ -284,13 +359,16 @@ async function callGroqVision(
   const resp = await groq.chat.completions.create({
     model: config.visionModel,
     temperature: 0.1,
-    max_tokens: 2048,
+    max_tokens: 4096,
     messages: [
       { role: "system", content: sys },
       {
         role: "user",
         content: [
-          { type: "text", text: `${langHint}\n\nAnalyse the contract in this image and return JSON as instructed.` },
+          {
+            type: "text",
+            text: `${langHint}\n\nAnalyse the contract in this image and return JSON as instructed.`,
+          },
           { type: "image_url", image_url: { url: dataUrl } },
         ],
       },
@@ -298,25 +376,29 @@ async function callGroqVision(
   });
 
   const raw = resp.choices?.[0]?.message?.content ?? "{}";
-  // Some vision models wrap JSON in markdown fences — strip them.
-  const cleaned = raw.replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
+  const cleaned = raw
+    .replace(/^```json\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
   try {
     const parsedJson = JSON.parse(cleaned) as {
       matches?: RawModelMatch[];
       roadmapNote?: string;
     };
-    return { matches: parsedJson.matches ?? [], roadmapNote: parsedJson.roadmapNote };
+    return {
+      matches: parsedJson.matches ?? [],
+      roadmapNote: parsedJson.roadmapNote,
+    };
   } catch {
     return { matches: [], roadmapNote: "Vision model returned invalid JSON." };
   }
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic fallback — used when no API key is set, or API call fails.
+// Deterministic fallback — keyword matcher
 // ---------------------------------------------------------------------------
 
 const KEYWORDS_BY_RULE: Record<string, string[]> = {
-  // Construction
   "RERA-DELAY-001": ["delay", "possession", "force majeure", "compensation", "per month", "delay in giving", "delayed possession"],
   "RERA-CARPET-002": ["super built-up", "built-up area", "saleable area", "carpet area", "loading", "super area"],
   "RERA-TITLE-003": ["free and marketable", "encumbrance", "mortgage", "title defect", "clear title", "litigation"],
@@ -329,7 +411,6 @@ const KEYWORDS_BY_RULE: Record<string, string[]> = {
   "RERA-PLAN-010": ["alteration", "sanctioned plan", "structural", "amenities", "two-thirds", "2/3"],
   "RERA-PARK-011": ["parking", "stilt", "open parking", "covered parking", "garage"],
   "RERA-TRANSFER-012": ["transfer", "assignment", "nominee", "transfer fee", "transfer charges"],
-  // Finance
   "RBI-PERSONAL-FEE-001": ["processing fee", "documentation charge", "insurance premium", "incidental", "admin fee"],
   "RBI-FLOAT-RESET-002": ["floating", "benchmark", "reset", "repo rate", "spread", "external benchmark"],
   "RBI-PREPAY-003": ["prepayment", "foreclosure", "pre-payment", "pre closure", "pre-closure", "early closure"],
@@ -342,7 +423,6 @@ const KEYWORDS_BY_RULE: Record<string, string[]> = {
   "GOLD-BUYBACK-010": ["buyback", "buy back", "making charge", "wastage", "resale", "exchange"],
   "GOLD-HALLMARK-011": ["hallmark", "huid", "bis", "purity", "carat", "22k", "24k", "18k", "14k"],
   "RBI-GOLDLTV-012": ["ltv", "loan to value", "loan-to-value", "auction", "pledge", "gold loan"],
-  // Gig-job
   "GIG-RATE-001": ["rate card", "rate change", "pay rate", "incentive", "per task", "piece rate", "revision"],
   "GIG-TERM-002": ["at will", "at the will", "without cause", "terminate", "termination", "summary termination", "without notice"],
   "GIG-NONCOMPETE-003": ["non-compete", "non compete", "restraint", "competing", "competitor", "shall not engage"],
@@ -388,11 +468,35 @@ function fallbackMatch(
     if (seenSnippets.has(key)) continue;
     seenSnippets.add(key);
 
+    const confidence =
+      hits.length >= 4 ? "high" : hits.length >= 3 ? "medium" : "low";
+    const involvesCharge = rule.involvesChargeValidation ?? false;
+    const chargeValidity: ChargeValidity = involvesCharge
+      ? "invalid"
+      : "not_applicable";
+    const permittedCharge = rule.permittedCharge ?? (involvesCharge ? "As per statute" : undefined);
+
     matches.push({
       ruleId: rule.id,
       snippet,
-      confidence: hits.length >= 4 ? "high" : hits.length >= 3 ? "medium" : "low",
-      notes: `Matched on keywords: ${hits.slice(0, 4).join(", ")}.`,
+      confidence,
+      notes: `Fallback match on keywords: ${hits.slice(0, 4).join(", ")}.`,
+      chargeValidity,
+      chargeExtracted: involvesCharge
+        ? "(extracted from snippet — run with Groq for precise extraction)"
+        : undefined,
+      permittedCharge,
+      chargeAnalysisEn: rule.plainEnglishTemplate.replace("{clause}", snippet),
+      chargeAnalysisHi: rule.plainHindiTemplate.replace("{clause}", snippet),
+      summarizedReasonEn: `${rule.legal_basis} is violated by this clause. ${involvesCharge ? `The permitted charge is: ${permittedCharge}.` : ""}`,
+      summarizedReasonHi: `${rule.legal_basis} इस धारा द्वारा उल्लंघन किया गया है।`,
+      counterArgumentEn: `Under ${rule.legal_basis}, this clause is not enforceable. I request you to revise the agreement to comply with the statutory requirement. Failing which, I reserve the right to approach the appropriate authority.`,
+      counterArgumentHi: `${rule.legal_basis} के तहत, यह धारा लागू नहीं होती। मैं आपसे अनुरोध करता/करती हूँ कि आप समझौते को वैधानिक आवश्यकता के अनुसार संशोधित करें।`,
+      precedentStrength:
+        rule.legal_basis.includes("vs") || rule.legal_basis.includes("v.")
+          ? "binding"
+          : "statutory",
+      citedSections: [rule.legal_basis],
     });
   }
 
@@ -405,10 +509,13 @@ function fallbackMatch(
 }
 
 // ---------------------------------------------------------------------------
-// Render — fill the rule's plain-language template with the matched snippet
+// Render templates
 // ---------------------------------------------------------------------------
 
-function renderTemplates(rule: Rule, snippet: string): { en: string; hi: string } {
+function renderTemplates(
+  rule: Rule,
+  snippet: string
+): { en: string; hi: string } {
   const safe = snippet.replace(/\s+/g, " ").trim() || "(snippet unavailable)";
   return {
     en: rule.plainEnglishTemplate.replace("{clause}", safe),
@@ -424,7 +531,10 @@ export async function runSectorPipeline(
   input: SectorPipelineInput
 ): Promise<SectorPipelineResult> {
   const start = Date.now();
-  const rules = getRulesForSector(input.sector);
+
+  // 1. Load rules (local + Supabase merge)
+  const rulesResult = await loadRulesForSector(input.sector);
+  const rules = rulesResult.rules;
   if (!rules.length) {
     return {
       clauses: [],
@@ -432,10 +542,16 @@ export async function runSectorPipeline(
       pipelineMs: 0,
       usedFallback: false,
       keySource: "none",
+      rulesFromSupabase: 0,
+      rulebooksInjected: 0,
     };
   }
 
-  // Pick the per-sector config (key + model)
+  // 2. Load full-text rulebooks from Supabase
+  const rulebooksResult = await loadRulebooksForSector(input.sector);
+  const rulebooks = rulebooksResult.docs;
+
+  // 3. Pick the per-sector Groq config
   const config = getSectorConfig(input.sector);
 
   let raw: { matches: RawModelMatch[]; roadmapNote?: string } | null = null;
@@ -444,9 +560,23 @@ export async function runSectorPipeline(
   if (config.apiKey) {
     try {
       if (input.parsed.kind === "image") {
-        raw = await callGroqVision(input.parsed, rules, input.sector, input.docLanguage, config);
+        raw = await callGroqVision(
+          input.parsed,
+          rules,
+          input.sector,
+          input.docLanguage,
+          config,
+          rulebooks
+        );
       } else {
-        raw = await callGroqText(input.parsed, rules, input.sector, input.docLanguage, config);
+        raw = await callGroqText(
+          input.parsed,
+          rules,
+          input.sector,
+          input.docLanguage,
+          config,
+          rulebooks
+        );
       }
     } catch (err) {
       raw = {
@@ -456,8 +586,13 @@ export async function runSectorPipeline(
     }
   }
 
-  // Fallback — keyword matcher — if no API key, API call failed, or model returned zero matches.
-  if (!raw || (raw.matches.length === 0 && input.parsed.kind === "text" && (input.parsed.text ?? "").length > 0)) {
+  // Fallback — keyword matcher
+  if (
+    !raw ||
+    (raw.matches.length === 0 &&
+      input.parsed.kind === "text" &&
+      (input.parsed.text ?? "").length > 0)
+  ) {
     const fb = fallbackMatch(input.parsed, rules, input.docLanguage);
     if (fb.matches.length > 0 || !raw) {
       raw = fb;
@@ -465,7 +600,7 @@ export async function runSectorPipeline(
     }
   }
 
-  // Resolve raw matches to full MatchedClause objects.
+  // Resolve raw matches to full MatchedClause objects
   const rulesById = new Map<string, Rule>(rules.map((r) => [r.id, r]));
   const clauses: MatchedClause[] = [];
   for (const m of raw.matches) {
@@ -473,6 +608,7 @@ export async function runSectorPipeline(
     if (!rule) continue;
     if (!m.snippet || m.snippet.length < 5) continue;
     const rendered = renderTemplates(rule, m.snippet);
+
     clauses.push({
       ruleId: rule.id,
       category: rule.category,
@@ -482,6 +618,21 @@ export async function runSectorPipeline(
       explanationHi: rendered.hi,
       legalBasis: rule.legal_basis,
       roadmapNote: m.notes || raw.roadmapNote,
+      chargeValidity: m.chargeValidity ?? "not_applicable",
+      chargeExtracted: m.chargeExtracted,
+      permittedCharge: m.permittedCharge ?? rule.permittedCharge,
+      chargeAnalysisEn: m.chargeAnalysisEn ?? rendered.en,
+      chargeAnalysisHi: m.chargeAnalysisHi ?? rendered.hi,
+      summarizedReasonEn: m.summarizedReasonEn ?? rendered.en,
+      summarizedReasonHi: m.summarizedReasonHi ?? rendered.hi,
+      counterArgumentEn:
+        m.counterArgumentEn ??
+        `Under ${rule.legal_basis}, this clause is not enforceable.`,
+      counterArgumentHi:
+        m.counterArgumentHi ??
+        `${rule.legal_basis} के तहत, यह धारा लागू नहीं होती।`,
+      precedentStrength: m.precedentStrength ?? "statutory",
+      citedSections: m.citedSections ?? [rule.legal_basis],
     });
   }
 
@@ -495,6 +646,8 @@ export async function runSectorPipeline(
     roadmapNote: raw?.roadmapNote,
     usedFallback,
     keySource: config.keySource,
+    rulesFromSupabase: rulesResult.supabaseCount,
+    rulebooksInjected: rulebooks.length,
   };
 }
 
