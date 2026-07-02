@@ -3,20 +3,19 @@
 // ---------------------------------------------------------------------------
 // Extract → Match → Explain pipeline using the Groq SDK.
 //
-// Inputs:
-//   • parsedDocument — text or image payload (from /lib/parsers)
-//   • sector         — which rules DB to load (construction / finance / gig-job)
-//   • docLanguage    — language the document is written in (en / hi / hinglish / other)
+// **Multi-key architecture**: ContractGuard uses THREE Groq accounts — one
+// per sector. The right API key + model is selected based on the user's
+// chosen sector, so you can spread load across free-tier accounts and
+// pick a different model per document type.
 //
-// Output:
-//   • MatchedClause[] — every rule the model matched, with the exact
-//     snippet from the document and the rendered plain-English + Hindi
-//     explanation.
+// Env vars (one set per sector):
+//   GROQ_API_KEY_CONSTRUCTION  +  GROQ_MODEL_CONSTRUCTION  +  GROQ_VISION_MODEL_CONSTRUCTION
+//   GROQ_API_KEY_FINANCE       +  GROQ_MODEL_FINANCE       +  GROQ_VISION_MODEL_FINANCE
+//   GROQ_API_KEY_GIG_JOB       +  GROQ_MODEL_GIG_JOB       +  GROQ_VISION_MODEL_GIG_JOB
 //
-// The model is constrained to ONLY match rules from the supplied database
-// — it can never invent a rule. If GROQ_API_KEY is not set, the pipeline
-// falls back to a deterministic keyword matcher so the demo still works
-// end-to-end in environments without a key.
+// Fallback: if the sector-specific key is missing, we try a generic
+// GROQ_API_KEY (handy for local dev with a single key). If that's also
+// missing, the deterministic keyword matcher runs so the demo still works.
 // ===========================================================================
 
 import Groq from "groq-sdk";
@@ -31,7 +30,7 @@ import { getRulesForSector } from "@/lib/rules";
 import type { ParsedDocument } from "@/lib/parsers";
 
 // ---------------------------------------------------------------------------
-// Pipeline input
+// Pipeline input / output
 // ---------------------------------------------------------------------------
 
 export interface SectorPipelineInput {
@@ -46,6 +45,8 @@ export interface SectorPipelineResult {
   pipelineMs: number;
   roadmapNote?: string;
   usedFallback: boolean;
+  /** Which Groq account / key was actually used (for logs, not PII). */
+  keySource: "construction" | "finance" | "gig_job" | "generic" | "none";
 }
 
 // ---------------------------------------------------------------------------
@@ -61,29 +62,77 @@ const SEVERITY_WEIGHT: Record<Severity, number> = {
 export function computeRiskScore(clauses: MatchedClause[]): number {
   if (clauses.length === 0) return 0;
   const raw = clauses.reduce((sum, c) => sum + SEVERITY_WEIGHT[c.severity], 0);
-  // Soft cap so a doc with many low-severity flags doesn't saturate to 100.
-  const capped = Math.min(raw, 100);
-  return Math.round(capped);
+  return Math.min(Math.round(raw), 100);
 }
 
 // ---------------------------------------------------------------------------
-// Groq client (lazy — only created if API key is present)
+// Per-sector env config
 // ---------------------------------------------------------------------------
 
-let _groq: Groq | null = null;
-function getGroq(): Groq | null {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) return null;
-  if (!_groq) _groq = new Groq({ apiKey: key });
-  return _groq;
+interface SectorConfig {
+  apiKey: string | undefined;
+  textModel: string;
+  visionModel: string;
+  /** Which env slot the key came from — surfaced in pipeline result. */
+  keySource: "construction" | "finance" | "gig_job" | "generic" | "none";
 }
 
-// ---------------------------------------------------------------------------
-// Model selection
-// ---------------------------------------------------------------------------
+const DEFAULT_TEXT_MODEL = "llama-3.3-70b-versatile";
+const DEFAULT_VISION_MODEL = "llama-3.2-90b-vision-preview";
 
-const TEXT_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
-const VISION_MODEL = process.env.GROQ_VISION_MODEL || "llama-3.2-90b-vision-preview";
+function getSectorConfig(sector: Sector): SectorConfig {
+  // Sector-specific env var names. GIG_JOB uses underscore to match
+  // conventional env-var naming (GROQ_API_KEY_GIG_JOB).
+  const sectorKey = sector.toUpperCase().replace("-", "_"); // CONSTRUCTION | FINANCE | GIG_JOB
+
+  const sectorApiKey = process.env[`GROQ_API_KEY_${sectorKey}`];
+  const sectorTextModel =
+    process.env[`GROQ_MODEL_${sectorKey}`] || DEFAULT_TEXT_MODEL;
+  const sectorVisionModel =
+    process.env[`GROQ_VISION_MODEL_${sectorKey}`] || DEFAULT_VISION_MODEL;
+
+  if (sectorApiKey) {
+    return {
+      apiKey: sectorApiKey,
+      textModel: sectorTextModel,
+      visionModel: sectorVisionModel,
+      keySource: sectorKey.toLowerCase() as SectorConfig["keySource"],
+    };
+  }
+
+  // Fallback: generic GROQ_API_KEY (for local dev with a single key)
+  const genericKey = process.env.GROQ_API_KEY;
+  if (genericKey) {
+    return {
+      apiKey: genericKey,
+      textModel: process.env.GROQ_MODEL || DEFAULT_TEXT_MODEL,
+      visionModel: process.env.GROQ_VISION_MODEL || DEFAULT_VISION_MODEL,
+      keySource: "generic",
+    };
+  }
+
+  // No key at all — keyword fallback will run
+  return {
+    apiKey: undefined,
+    textModel: sectorTextModel,
+    visionModel: sectorVisionModel,
+    keySource: "none",
+  };
+}
+
+// Cache one Groq client per API key so we don't re-instantiate on every call
+// (the SDK does connection pooling internally; we just want to avoid the
+// constructor overhead).
+const _groqClients = new Map<string, Groq>();
+
+function getGroq(apiKey: string): Groq {
+  let client = _groqClients.get(apiKey);
+  if (!client) {
+    client = new Groq({ apiKey });
+    _groqClients.set(apiKey, client);
+  }
+  return client;
+}
 
 // ---------------------------------------------------------------------------
 // Internal: the JSON schema we ask the model to emit
@@ -116,7 +165,7 @@ For every match you must quote the EXACT text snippet from the contract that tri
 SECTOR: ${sector}
 
 RULES (id | category | severity | legal_basis | pattern):
-${rulesDigest}
+ ${rulesDigest}
 
 OUTPUT FORMAT — return ONLY a JSON object, no prose, no markdown fences:
 {
@@ -150,7 +199,7 @@ DOCUMENT FILENAME: ${parsed.filename}
 CONTRACT TEXT:
 """`;
   const footer = `"""`;
-  const text = (parsed.text ?? "").slice(0, 60_000); // hard cap to keep prompt bounded
+  const text = (parsed.text ?? "").slice(0, 60_000);
   return `${header}\n${text}\n${footer}`;
 }
 
@@ -173,16 +222,17 @@ async function callGroqText(
   parsed: ParsedDocument,
   rules: Rule[],
   sector: Sector,
-  docLanguage: DocLanguage
+  docLanguage: DocLanguage,
+  config: SectorConfig
 ): Promise<{ matches: RawModelMatch[]; roadmapNote?: string } | null> {
-  const groq = getGroq();
-  if (!groq) return null;
+  if (!config.apiKey) return null;
+  const groq = getGroq(config.apiKey);
 
   const sys = buildTextSystemPrompt(rules, sector);
   const user = buildTextUserPrompt(parsed, docLanguage);
 
   const resp = await groq.chat.completions.create({
-    model: TEXT_MODEL,
+    model: config.textModel,
     temperature: 0.1,
     max_tokens: 2048,
     response_format: { type: "json_object" },
@@ -212,11 +262,12 @@ async function callGroqVision(
   parsed: ParsedDocument,
   rules: Rule[],
   sector: Sector,
-  docLanguage: DocLanguage
+  docLanguage: DocLanguage,
+  config: SectorConfig
 ): Promise<{ matches: RawModelMatch[]; roadmapNote?: string } | null> {
-  const groq = getGroq();
-  if (!groq) return null;
+  if (!config.apiKey) return null;
   if (!parsed.base64 || !parsed.mediaType) return null;
+  const groq = getGroq(config.apiKey);
 
   const sys = buildVisionSystemPrompt(rules, sector);
   const langHint =
@@ -231,7 +282,7 @@ async function callGroqVision(
   const dataUrl = `data:${parsed.mediaType};base64,${parsed.base64}`;
 
   const resp = await groq.chat.completions.create({
-    model: VISION_MODEL,
+    model: config.visionModel,
     temperature: 0.1,
     max_tokens: 2048,
     messages: [
@@ -261,7 +312,7 @@ async function callGroqVision(
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic fallback — used when no GROQ_API_KEY is set.
+// Deterministic fallback — used when no API key is set, or API call fails.
 // ---------------------------------------------------------------------------
 
 const KEYWORDS_BY_RULE: Record<string, string[]> = {
@@ -320,9 +371,8 @@ function fallbackMatch(
     const keywords = KEYWORDS_BY_RULE[rule.id] ?? [];
     if (!keywords.length) continue;
     const hits = keywords.filter((k) => text.includes(k.toLowerCase()));
-    if (hits.length < 2) continue; // need >=2 distinct keyword hits to fire
+    if (hits.length < 2) continue;
 
-    // Find the snippet — pick the window around the earliest hit
     const firstHit = hits
       .map((k) => text.indexOf(k.toLowerCase()))
       .filter((i) => i >= 0)
@@ -376,27 +426,37 @@ export async function runSectorPipeline(
   const start = Date.now();
   const rules = getRulesForSector(input.sector);
   if (!rules.length) {
-    return { clauses: [], rulesConsidered: 0, pipelineMs: 0, usedFallback: false };
-  }
-
-  // Try the real Groq path first.
-  let raw: { matches: RawModelMatch[]; roadmapNote?: string } | null = null;
-  let usedFallback = false;
-
-  try {
-    if (input.parsed.kind === "image") {
-      raw = await callGroqVision(input.parsed, rules, input.sector, input.docLanguage);
-    } else {
-      raw = await callGroqText(input.parsed, rules, input.sector, input.docLanguage);
-    }
-  } catch (err) {
-    raw = {
-      matches: [],
-      roadmapNote: `Groq API error: ${(err as Error).message}. Falling back to keyword matcher.`,
+    return {
+      clauses: [],
+      rulesConsidered: 0,
+      pipelineMs: 0,
+      usedFallback: false,
+      keySource: "none",
     };
   }
 
-  // Fallback — keyword matcher — if no API key or model failed.
+  // Pick the per-sector config (key + model)
+  const config = getSectorConfig(input.sector);
+
+  let raw: { matches: RawModelMatch[]; roadmapNote?: string } | null = null;
+  let usedFallback = false;
+
+  if (config.apiKey) {
+    try {
+      if (input.parsed.kind === "image") {
+        raw = await callGroqVision(input.parsed, rules, input.sector, input.docLanguage, config);
+      } else {
+        raw = await callGroqText(input.parsed, rules, input.sector, input.docLanguage, config);
+      }
+    } catch (err) {
+      raw = {
+        matches: [],
+        roadmapNote: `Groq API error (${config.keySource} key): ${(err as Error).message}. Falling back to keyword matcher.`,
+      };
+    }
+  }
+
+  // Fallback — keyword matcher — if no API key, API call failed, or model returned zero matches.
   if (!raw || (raw.matches.length === 0 && input.parsed.kind === "text" && (input.parsed.text ?? "").length > 0)) {
     const fb = fallbackMatch(input.parsed, rules, input.docLanguage);
     if (fb.matches.length > 0 || !raw) {
@@ -410,7 +470,7 @@ export async function runSectorPipeline(
   const clauses: MatchedClause[] = [];
   for (const m of raw.matches) {
     const rule = rulesById.get(m.ruleId);
-    if (!rule) continue; // model invented an id — drop
+    if (!rule) continue;
     if (!m.snippet || m.snippet.length < 5) continue;
     const rendered = renderTemplates(rule, m.snippet);
     clauses.push({
@@ -425,7 +485,6 @@ export async function runSectorPipeline(
     });
   }
 
-  // Sort by severity descending
   const sevRank: Record<Severity, number> = { high: 0, medium: 1, low: 2 };
   clauses.sort((a, b) => sevRank[a.severity] - sevRank[b.severity]);
 
@@ -435,8 +494,8 @@ export async function runSectorPipeline(
     pipelineMs: Date.now() - start,
     roadmapNote: raw?.roadmapNote,
     usedFallback,
+    keySource: config.keySource,
   };
 }
 
-// Re-exports for convenience
 export { computeRiskScore as computeRisk };
