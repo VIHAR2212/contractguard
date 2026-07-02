@@ -7,21 +7,17 @@ export type DocLanguage = "en" | "hi" | "hinglish";
 export type Severity = "high" | "medium" | "low";
 export type UiLanguage = "en" | "hi" | "hinglish";
 
-// ---------------------------------------------------------------------------
-// Charge validation — the core of "is this fee legal?"
-// ---------------------------------------------------------------------------
-
 export type ChargeValidity =
-  | "valid"               // the charge is legally permissible
-  | "invalid"             // the charge is prohibited / unenforceable
-  | "partially_valid"     // the charge exists but the amount/method is wrong
-  | "not_applicable";     // this clause doesn't involve a charge
+  | "valid"
+  | "invalid"
+  | "partially_valid"
+  | "not_applicable";
 
 export type PrecedentStrength =
-  | "statutory"           // black-letter law (Act / Regulation)
-  | "binding"             // Supreme Court judgment
-  | "persuasive"          // High Court judgment or tribunal order
-  | "regulatory";         // RBI / BIS / RERA circular or guideline
+  | "statutory"
+  | "binding"
+  | "persuasive"
+  | "regulatory";
 
 // ---------------------------------------------------------------------------
 // Rules DB
@@ -38,66 +34,45 @@ export interface Rule {
   plainEnglishTemplate: string;
   plainHindiTemplate: string;
 
-  /** Does this rule involve validating a charge / fee / cost? */
   involvesChargeValidation?: boolean;
-  /** Criteria for what makes the charge valid (e.g. "must appear in KFS, must be reasonable") */
   chargeValidationCriteria?: string;
-  /** Maximum permitted charge (e.g. "10% of booking", "Rs. 500", "actuals only", "0% — prohibited") */
   permittedCharge?: string;
 
-  /** Where this rule came from — local file or Supabase */
   source?: "local" | "supabase";
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline output — the deep-research result
+// Pipeline output
+// ---------------------------------------------------------------------------
+// NOTE: The deep-research fields (chargeValidity, chargeAnalysisEn,
+// summarizedReasonEn, counterArgumentEn, precedentStrength, citedSections,
+// etc.) are OPTIONAL so that both the simple pipeline and the deep-research
+// pipeline can produce MatchedClause objects. The UI renders whichever
+// fields are present.
 // ---------------------------------------------------------------------------
 
 export interface MatchedClause {
   ruleId: string;
   category: string;
   severity: Severity;
-
-  /** The exact text snippet lifted from the document */
   snippet: string;
-
-  /** Plain-English explanation (full, from template) */
   explanationEn: string;
   explanationHi: string;
-
   legalBasis: string;
   roadmapNote?: string;
 
-  // -------------------------------------------------------------------------
-  // DEEP RESEARCH — charge validation + counter-argument
-  // -------------------------------------------------------------------------
-
-  /** Is the charge/cost in this clause legally valid? */
-  chargeValidity: ChargeValidity;
-
-  /** The exact charge amount extracted from the clause (e.g. "25% of total consideration") */
+  // Deep-research fields — optional, populated by the deep-research pipeline
+  chargeValidity?: ChargeValidity;
   chargeExtracted?: string;
-
-  /** What the law actually permits (e.g. "max 10% of booking amount") */
   permittedCharge?: string;
-
-  /** Specific analysis of WHY the charge is valid/invalid — with statutory reasoning */
-  chargeAnalysisEn: string;
-  chargeAnalysisHi: string;
-
-  /** 1-2 sentence powerful summary — the "no lawyer can speak" line */
-  summarizedReasonEn: string;
-  summarizedReasonHi: string;
-
-  /** Ready-to-use counter-statement the user can send to the builder/bank/employer */
-  counterArgumentEn: string;
-  counterArgumentHi: string;
-
-  /** Strength of the legal basis */
-  precedentStrength: PrecedentStrength;
-
-  /** Specific section numbers cited (e.g. ["Section 18", "Section 14(1)"]) */
-  citedSections: string[];
+  chargeAnalysisEn?: string;
+  chargeAnalysisHi?: string;
+  summarizedReasonEn?: string;
+  summarizedReasonHi?: string;
+  counterArgumentEn?: string;
+  counterArgumentHi?: string;
+  precedentStrength?: PrecedentStrength;
+  citedSections?: string[];
 }
 
 export interface AnalyzeResponse {
@@ -109,15 +84,13 @@ export interface AnalyzeResponse {
   message?: string;
   rulesConsidered: number;
   pipelineMs: number;
-  /** How many rules came from Supabase vs. local */
   rulesFromSupabase?: number;
-  /** How many rulebook documents were injected as context */
   rulebooksInjected?: number;
   keySource?: "construction" | "finance" | "gig_job" | "generic" | "none";
 }
 
 // ---------------------------------------------------------------------------
-// i18n — unchanged
+// i18n
 // ---------------------------------------------------------------------------
 
 export interface UiStrings {
@@ -177,23 +150,23 @@ export interface UiStrings {
   report_back: string;
   report_download: string;
 
-  // NEW — deep research labels
-  report_charge_validity: string;
-  report_charge_valid: string;
-  report_charge_invalid: string;
-  report_charge_partial: string;
-  report_charge_na: string;
-  report_charge_extracted: string;
-  report_charge_permitted: string;
-  report_charge_analysis: string;
-  report_summarized_reason: string;
-  report_counter_argument: string;
-  report_cited_sections: string;
-  report_precedent: string;
-  report_precedent_statutory: string;
-  report_precedent_binding: string;
-  report_precedent_persuasive: string;
-  report_precedent_regulatory: string;
+  // Deep-research labels (optional in UI — used only if rendered)
+  report_charge_validity?: string;
+  report_charge_valid?: string;
+  report_charge_invalid?: string;
+  report_charge_partial?: string;
+  report_charge_na?: string;
+  report_charge_extracted?: string;
+  report_charge_permitted?: string;
+  report_charge_analysis?: string;
+  report_summarized_reason?: string;
+  report_counter_argument?: string;
+  report_cited_sections?: string;
+  report_precedent?: string;
+  report_precedent_statutory?: string;
+  report_precedent_binding?: string;
+  report_precedent_persuasive?: string;
+  report_precedent_regulatory?: string;
 
   transparency_title: string;
   transparency_intro: string;
@@ -205,8 +178,8 @@ export interface UiStrings {
   transparency_ai_role_body: string;
   transparency_disclaimer_heading: string;
   transparency_disclaimer_body: string;
-  transparency_supabase_heading: string;
-  transparency_supabase_body: string;
+  transparency_supabase_heading?: string;
+  transparency_supabase_body?: string;
 
   lang_switch_label: string;
   footer_built: string;
