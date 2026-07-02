@@ -84,6 +84,32 @@ function riskTone(score: number): { label: string; color: string } {
 }
 
 // ---------------------------------------------------------------------------
+// Motion — one restrained vocabulary reused everywhere: a short fade+rise
+// on entrance, staggered by container, and a single scroll-reveal used for
+// every section below the fold. No bounce, no rotation, no glow — the
+// same discipline the rest of the page already holds itself to.
+// ---------------------------------------------------------------------------
+
+const staggerContainer = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.09, delayChildren: 0.05 } },
+};
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 14 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } },
+};
+
+const revealOnScroll = {
+  initial: { opacity: 0, y: 20 },
+  whileInView: { opacity: 1, y: 0 },
+  viewport: { once: true, margin: "-80px" },
+  transition: { duration: 0.5, ease: "easeOut" },
+} as const;
+
+const tapScale = { scale: 0.97 };
+
+// ---------------------------------------------------------------------------
 // Page state
 // ---------------------------------------------------------------------------
 
@@ -183,7 +209,14 @@ export default function Home() {
     <div
       className="min-h-screen flex flex-col"
       style={{
-        background: "#000000",
+        // Transparent on purpose — body (globals.css) already paints the
+        // black base layer, and FlyingPapersBackground sits between body
+        // and this div. Leaving this opaque would hide the storm behind
+        // every empty stretch of page. Cards and panels still set their
+        // own #0a0a0a / #000000 backgrounds, so nothing readable loses
+        // contrast — only the true negative space around them.
+        position: "relative",
+        zIndex: 1,
         color: "#e8e8e8",
         fontFamily: "var(--font-inter), system-ui, sans-serif",
       }}
@@ -191,7 +224,10 @@ export default function Home() {
       {/* ============================================================
           NAV — 59px, frosted glass, 1px #242424 bottom, zero color
           ============================================================ */}
-      <header
+      <motion.header
+        initial={{ y: -20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
         className="sticky top-0 z-30 nav-frosted"
         style={{ height: 59, borderBottom: "1px solid #242424" }}
       >
@@ -272,23 +308,36 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <a href="#analyze" className="btn-outline-neutral">
+            <motion.a
+              href="#analyze"
+              whileHover={{ scale: 1.04 }}
+              whileTap={tapScale}
+              className="btn-outline-neutral"
+            >
               {t.hero_cta}
               <ArrowRight style={{ width: 13, height: 13 }} />
-            </a>
+            </motion.a>
           </div>
         </div>
-      </header>
+      </motion.header>
 
       {/* ============================================================
           HERO — DM Serif Display, the only place this face appears
           ============================================================ */}
       <section className="w-full" style={{ paddingTop: 96, paddingBottom: 72 }}>
-        <div className="mx-auto px-6" style={{ maxWidth: 1200 }}>
-          {/* Announcement pill — static, no motion, no color */}
-          <div className="flex justify-center mb-8">
-            <a
+        <motion.div
+          className="mx-auto px-6"
+          style={{ maxWidth: 1200 }}
+          variants={staggerContainer}
+          initial="hidden"
+          animate="show"
+        >
+          {/* Announcement pill */}
+          <motion.div variants={fadeUp} className="flex justify-center mb-8">
+            <motion.a
               href="#transparency"
+              whileHover={{ scale: 1.03 }}
+              whileTap={tapScale}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -307,11 +356,12 @@ export default function Home() {
             >
               {t.hero_eyebrow}
               <ArrowRight style={{ width: 12, height: 12, color: "#6b6b6b" }} />
-            </a>
-          </div>
+            </motion.a>
+          </motion.div>
 
           {/* Hero headline — DM Serif Display, 96px desktop / 40px mobile */}
-          <h1
+          <motion.h1
+            variants={fadeUp}
             className="text-center mx-auto"
             style={{
               fontFamily: "var(--font-dm-serif-display), Georgia, serif",
@@ -325,10 +375,11 @@ export default function Home() {
             }}
           >
             {t.hero_title}
-          </h1>
+          </motion.h1>
 
           {/* Subtitle — Inter, muted */}
-          <p
+          <motion.p
+            variants={fadeUp}
             className="text-center mx-auto"
             style={{
               maxWidth: 720,
@@ -341,10 +392,11 @@ export default function Home() {
             }}
           >
             {t.hero_subtitle}
-          </p>
+          </motion.p>
 
           {/* Hero quote */}
-          <p
+          <motion.p
+            variants={fadeUp}
             className="text-center mx-auto"
             style={{
               maxWidth: 640,
@@ -357,16 +409,24 @@ export default function Home() {
             }}
           >
             {t.hero_quote}
-          </p>
+          </motion.p>
 
           {/* CTA row — outlined neutral primary + ghost secondary */}
-          <div className="flex items-center justify-center gap-4 mt-10 flex-wrap">
-            <a href="#analyze" className="btn-outline-neutral" style={{ padding: "10px 18px", fontSize: 14 }}>
+          <motion.div variants={fadeUp} className="flex items-center justify-center gap-4 mt-10 flex-wrap">
+            <motion.a
+              href="#analyze"
+              whileHover={{ scale: 1.04 }}
+              whileTap={tapScale}
+              className="btn-outline-neutral"
+              style={{ padding: "10px 18px", fontSize: 14 }}
+            >
               {t.hero_cta}
               <ArrowRight style={{ width: 14, height: 14 }} />
-            </a>
-            <a
+            </motion.a>
+            <motion.a
               href="#transparency"
+              whileHover={{ scale: 1.04 }}
+              whileTap={tapScale}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -379,9 +439,9 @@ export default function Home() {
               className="hover:text-white transition-colors"
             >
               {t.nav_transparency}
-            </a>
-          </div>
-        </div>
+            </motion.a>
+          </motion.div>
+        </motion.div>
       </section>
 
       {/* ============================================================
@@ -392,7 +452,7 @@ export default function Home() {
           {/* Section heading — Inter, tight tracking, no numbered eyebrow.
               (Analyze / Transparency aren't steps in a sequence, so they
               don't get a step marker — a plain label instead.) */}
-          <div className="mb-10">
+          <motion.div {...revealOnScroll} className="mb-10">
             <div
               style={{
                 fontFamily: "var(--font-inter), sans-serif",
@@ -416,10 +476,14 @@ export default function Home() {
             >
               Drop the contract. Get the risk report.
             </h2>
-          </div>
+          </motion.div>
 
           {/* Two-column grid: dropzone (left, wider) + selectors (right) */}
-          <div className="grid lg:grid-cols-[1fr_360px] gap-4">
+          <motion.div
+            {...revealOnScroll}
+            transition={{ duration: 0.5, ease: "easeOut", delay: 0.1 }}
+            className="grid lg:grid-cols-[1fr_360px] gap-4"
+          >
             {/* ============================================================
                 Dropzone / paste — feature card surface, static
                 ============================================================ */}
@@ -628,8 +692,10 @@ export default function Home() {
                   {SECTORS.map((s) => {
                     const active = sector === s.id;
                     return (
-                      <button
+                      <motion.button
                         key={s.id}
+                        whileHover={{ scale: 1.015 }}
+                        whileTap={tapScale}
                         onClick={() => setSector(s.id)}
                         style={{
                           textAlign: "left",
@@ -646,7 +712,7 @@ export default function Home() {
                         className="hover:border-[#3a3a3a] hover:text-white transition-colors"
                       >
                         {t[s.labelKey] as string}
-                      </button>
+                      </motion.button>
                     );
                   })}
                 </div>
@@ -671,8 +737,10 @@ export default function Home() {
                   {DOC_LANGS.map((l) => {
                     const active = docLanguage === l.id;
                     return (
-                      <button
+                      <motion.button
                         key={l.id}
+                        whileHover={{ scale: 1.03 }}
+                        whileTap={tapScale}
                         onClick={() => setDocLanguage(l.id)}
                         style={{
                           flex: 1,
@@ -689,14 +757,16 @@ export default function Home() {
                         className="hover:border-[#3a3a3a] hover:text-white transition-colors"
                       >
                         {t[l.labelKey] as string}
-                      </button>
+                      </motion.button>
                     );
                   })}
                 </div>
               </div>
 
               {/* Analyze button — the single primary action, neutral outline */}
-              <button
+              <motion.button
+                whileHover={canAnalyze ? { scale: 1.015 } : undefined}
+                whileTap={canAnalyze ? tapScale : undefined}
                 onClick={analyze}
                 disabled={!canAnalyze}
                 className={canAnalyze ? "btn-outline-neutral" : ""}
@@ -732,7 +802,7 @@ export default function Home() {
                     <ArrowRight style={{ width: 14, height: 14 }} />
                   </>
                 )}
-              </button>
+              </motion.button>
 
               {/* Progress lines — the one place a short, purposeful
                   animation earns its keep: it's reporting real pipeline
@@ -746,7 +816,7 @@ export default function Home() {
                 </div>
               )}
             </div>
-          </div>
+          </motion.div>
 
           {/* Error */}
           <AnimatePresence>
@@ -782,7 +852,7 @@ export default function Home() {
           ============================================================ */}
       <section id="transparency" className="w-full" style={{ paddingTop: 80, paddingBottom: 120, borderTop: "1px solid #242424" }}>
         <div className="mx-auto px-6" style={{ maxWidth: 1200 }}>
-          <div className="mb-12">
+          <motion.div {...revealOnScroll} className="mb-12">
             <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 13, color: "#6b6b6b", marginBottom: 8, fontWeight: 500 }}>
               Transparency
             </div>
@@ -802,7 +872,7 @@ export default function Home() {
             <p style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 16, lineHeight: 1.6, color: "#9a9a9a", maxWidth: 720 }}>
               {t.transparency_intro}
             </p>
-          </div>
+          </motion.div>
 
           <div className="grid md:grid-cols-2 gap-4">
             <Panel eyebrow="Privacy" title={t.transparency_no_logging_heading}>
@@ -844,7 +914,11 @@ export default function Home() {
           FOOTER — minimal, two links
           ============================================================ */}
       <footer className="mt-auto" style={{ borderTop: "1px solid #242424", padding: "32px 0" }}>
-        <div className="mx-auto px-6 flex items-center justify-between" style={{ maxWidth: 1200 }}>
+        <motion.div
+          {...revealOnScroll}
+          className="mx-auto px-6 flex items-center justify-between"
+          style={{ maxWidth: 1200 }}
+        >
           <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 13, color: "#6b6b6b" }}>{t.footer_built}</div>
           <div className="flex items-center gap-6">
             <a
@@ -862,7 +936,7 @@ export default function Home() {
               {t.nav_transparency}
             </a>
           </div>
-        </div>
+        </motion.div>
       </footer>
 
       {/* Scoped styles for the one reusable button pattern in the system:
@@ -921,7 +995,11 @@ function ProgressLine({ done, label }: { done: boolean; label: string }) {
 
 function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: "#0a0a0a", border: "1px solid #242424", borderRadius: 16, padding: 32 }}>
+    <motion.div
+      {...revealOnScroll}
+      whileHover={{ y: -3, borderColor: "#3a3a3a" }}
+      style={{ background: "#0a0a0a", border: "1px solid #242424", borderRadius: 16, padding: 32 }}
+    >
       <div
         style={{
           fontFamily: "var(--font-inter), sans-serif",
@@ -939,7 +1017,7 @@ function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; c
         {title}
       </h3>
       {children}
-    </div>
+    </motion.div>
   );
 }
 
