@@ -4,10 +4,14 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ===========================================================================
-   ContractGuard — Resend-inspired design tokens
-   Pure black canvas (#000000), 1px #292d30 hairline borders, no shadows.
-   Single chromatic accent: Electric Blue #3b9eff on the primary CTA only.
-   Status colors (green/red/yellow/blue/lavender) reserved for product UI.
+   ContractGuard — monochrome redline system
+   ---------------------------------------------------------------------------
+   Pure black canvas. No chromatic accent anywhere — buttons, borders, and
+   focus states are all grey/off-white. The only color in the entire system
+   is reserved for clause severity in the report body, because that is data
+   the reader must be able to scan at a glance, not decoration. Severity
+   colors are desaturated (grey-tinted) so they read as signal, not neon.
+   No box-shadow, no glow, no filled buttons anywhere.
    =========================================================================== */
 
 @theme inline {
@@ -52,81 +56,87 @@
 }
 
 :root {
-  /* Radius scale — buttons 6px, cards 16px, pills 16px, tags 10px */
   --radius: 0.625rem;
 
-  /* Resend dark palette as the default (no light mode toggle) */
-  --background: #000000;             /* Void Black — page canvas */
-  --foreground: #f0f0f0;             /* Frost — primary text */
-  --card: #0b0e14;                   /* Card Surface — barely distinguishable from canvas */
-  --card-foreground: #f0f0f0;
-  --popover: #0b0e14;
-  --popover-foreground: #f0f0f0;
+  /* Neutral scale — everything here is grey or off-white, no hue */
+  --background: #000000;
+  --foreground: #e8e8e8;
+  --card: #0a0a0a;
+  --card-foreground: #e8e8e8;
+  --popover: #0a0a0a;
+  --popover-foreground: #e8e8e8;
 
-  --primary: #3b9eff;                /* Electric Blue — used as outlined CTA border, not as fill */
-  --primary-foreground: #ffffff;
-  --secondary: #1b1b1b;              /* Overlay — gradient top of dark cards */
-  --secondary-foreground: #f0f0f0;
-  --muted: #1b1b1b;
-  --muted-foreground: #a1a4a5;       /* Fog — primary muted body text */
-  --accent: #292d30;                 /* Graphite Rail */
-  --accent-foreground: #f0f0f0;
-  --destructive: #ff9592;            /* Bounced Red — status only */
+  /* Primary is off-white, not blue — used only as a 1px border + label,
+     never as a filled background. This is the "action" signal now. */
+  --primary: #e8e8e8;
+  --primary-foreground: #000000;
+  --secondary: #141414;
+  --secondary-foreground: #e8e8e8;
+  --muted: #141414;
+  --muted-foreground: #9a9a9a;
+  --accent: #242424;
+  --accent-foreground: #e8e8e8;
+  --destructive: #c9827f;
 
-  --border: #292d30;                 /* Graphite Rail — hairline borders */
-  --input: #292d30;
-  --ring: #3b9eff;                   /* focus ring uses Electric Blue */
+  --border: #242424;
+  --input: #242424;
+  --ring: #6b6b6b;
 
-  --chart-1: #3ad389;                /* Delivered Green — status only */
-  --chart-2: #ff9592;                /* Bounced Red — status only */
-  --chart-3: #ffca16;                /* Complained Yellow — status only */
-  --chart-4: #70b8ff;                /* Opened Blue — status only */
-  --chart-5: #baa7ff;                /* Clicked Lavender — status only */
+  /* Severity vocabulary — muted/desaturated on purpose. This color exists
+     to be scanned, not admired. Never reused outside the clause list. */
+  --sev-high: #c9827f;
+  --sev-medium: #c9ab6a;
+  --sev-low: #7f9db3;
+  --sev-ok: #7fae8e;
 
-  --sidebar: #0b0e14;
-  --sidebar-foreground: #f0f0f0;
-  --sidebar-primary: #3b9eff;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #1b1b1b;
-  --sidebar-accent-foreground: #f0f0f0;
-  --sidebar-border: #292d30;
-  --sidebar-ring: #3b9eff;
+  --chart-1: #7fae8e;
+  --chart-2: #c9827f;
+  --chart-3: #c9ab6a;
+  --chart-4: #7f9db3;
+  --chart-5: #9a9a9a;
+
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #e8e8e8;
+  --sidebar-primary: #e8e8e8;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-accent: #141414;
+  --sidebar-accent-foreground: #e8e8e8;
+  --sidebar-border: #242424;
+  --sidebar-ring: #6b6b6b;
 }
 
-/* Keep the .dark class identical so shadcn components that depend on it
-   still render correctly in our pure-dark app. */
 .dark {
   --background: #000000;
-  --foreground: #f0f0f0;
-  --card: #0b0e14;
-  --card-foreground: #f0f0f0;
-  --popover: #0b0e14;
-  --popover-foreground: #f0f0f0;
-  --primary: #3b9eff;
-  --primary-foreground: #ffffff;
-  --secondary: #1b1b1b;
-  --secondary-foreground: #f0f0f0;
-  --muted: #1b1b1b;
-  --muted-foreground: #a1a4a5;
-  --accent: #292d30;
-  --accent-foreground: #f0f0f0;
-  --destructive: #ff9592;
-  --border: #292d30;
-  --input: #292d30;
-  --ring: #3b9eff;
-  --chart-1: #3ad389;
-  --chart-2: #ff9592;
-  --chart-3: #ffca16;
-  --chart-4: #70b8ff;
-  --chart-5: #baa7ff;
-  --sidebar: #0b0e14;
-  --sidebar-foreground: #f0f0f0;
-  --sidebar-primary: #3b9eff;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #1b1b1b;
-  --sidebar-accent-foreground: #f0f0f0;
-  --sidebar-border: #292d30;
-  --sidebar-ring: #3b9eff;
+  --foreground: #e8e8e8;
+  --card: #0a0a0a;
+  --card-foreground: #e8e8e8;
+  --popover: #0a0a0a;
+  --popover-foreground: #e8e8e8;
+  --primary: #e8e8e8;
+  --primary-foreground: #000000;
+  --secondary: #141414;
+  --secondary-foreground: #e8e8e8;
+  --muted: #141414;
+  --muted-foreground: #9a9a9a;
+  --accent: #242424;
+  --accent-foreground: #e8e8e8;
+  --destructive: #c9827f;
+  --border: #242424;
+  --input: #242424;
+  --ring: #6b6b6b;
+  --chart-1: #7fae8e;
+  --chart-2: #c9827f;
+  --chart-3: #c9ab6a;
+  --chart-4: #7f9db3;
+  --chart-5: #9a9a9a;
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #e8e8e8;
+  --sidebar-primary: #e8e8e8;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-accent: #141414;
+  --sidebar-accent-foreground: #e8e8e8;
+  --sidebar-border: #242424;
+  --sidebar-ring: #6b6b6b;
 }
 
 @layer base {
@@ -144,29 +154,29 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-  /* Hide the default focus ring outline on mouse, keep it for keyboard */
+  /* No glow focus ring — a plain 1px offset outline in muted grey */
   :focus:not(:focus-visible) {
     outline: none;
   }
   :focus-visible {
-    outline: 2px solid #3b9eff;
+    outline: 1px solid #6b6b6b;
     outline-offset: 2px;
   }
 }
 
-/* Resend-style surface gradient — barely perceptible elevation on dark cards */
-.surface-lift {
-  background: linear-gradient(180deg, #1b1b1b 0%, #030303 100%);
-}
-
-/* Frosted-glass nav — backdrop-filter blur(25px) per spec */
+/* Nav frost — no color tint, pure neutral blur */
 .nav-frosted {
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(25px) saturate(150%);
-  -webkit-backdrop-filter: blur(25px) saturate(150%);
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
-/* Custom scrollbar for the dark theme */
+/* Hairline divider used between meta rows — replaces decorative gradients */
+.hairline-top {
+  border-top: 1px solid var(--border);
+}
+
+/* Scrollbar — neutral, no hover glow */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -175,10 +185,22 @@
   background: #000000;
 }
 ::-webkit-scrollbar-thumb {
-  background: #292d30;
+  background: #242424;
   border-radius: 8px;
   border: 2px solid #000000;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #464a4d;
+  background: #3a3a3a;
+}
+
+/* Reduced motion — respected globally, per design skill quality floor */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
