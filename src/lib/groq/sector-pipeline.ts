@@ -1,23 +1,14 @@
 // ===========================================================================
 // /lib/groq/sector-pipeline.ts
 // ---------------------------------------------------------------------------
-// DEEP RESEARCH pipeline using Groq SDK + Supabase rulebook context.
+// Extract → Match → Explain pipeline using Groq SDK + Supabase rulebook
+// context.
 //
-// What makes this "deep":
-//   1. Loads full-text rulebooks (RERA Act, RBI Master Directions, BIS
-//      Regulations, etc.) from Supabase and injects them into the prompt
-//      so the AI reads the actual statutory text, not just pattern descriptions.
-//   2. For every matched clause, the AI must:
-//      - Extract the exact charge / cost / fee mentioned
-//      - Validate it against the cited statute (valid / invalid / partial)
-//      - State what the law actually permits
-//      - Produce a 1-2 sentence "summarized reason" — the line that silences
-//        any lawyer or fraud
-//      - Produce a ready-to-use counter-argument the user can paste back
-//      - Cite specific section numbers
-//      - Rate the precedent strength (statutory / binding / persuasive / regulatory)
-//   3. Merges local rules + Supabase rules (Supabase overrides on ID collision)
-//   4. Uses three Groq accounts (one per sector) for load balancing
+// - Merges local rules + Supabase rules (Supabase overrides on ID collision)
+// - Loads full-text rulebooks from Supabase and injects them as context
+// - Uses three Groq accounts (one per sector) for load balancing
+// - Falls back to a deterministic keyword matcher when no API key is set
+//   or the API call fails, so the demo always returns a result
 // ===========================================================================
 
 import Groq from "groq-sdk";
@@ -31,7 +22,10 @@ import type {
   Severity,
 } from "@/lib/types";
 import { loadRulesForSector } from "@/lib/supabase/rules-loader";
-import { loadRulebooksForSector, type RulebookDoc } from "@/lib/supabase/rulebooks";
+import {
+  loadRulebooksForSector,
+  type RulebookDoc,
+} from "@/lib/supabase/rulebooks";
 import type { ParsedDocument } from "@/lib/parsers";
 
 // ---------------------------------------------------------------------------
@@ -140,17 +134,17 @@ interface RawModelMatch {
   snippet: string;
   confidence: "high" | "medium" | "low";
   notes?: string;
-  chargeValidity: ChargeValidity;
+  chargeValidity?: ChargeValidity;
   chargeExtracted?: string;
   permittedCharge?: string;
-  chargeAnalysisEn: string;
-  chargeAnalysisHi: string;
-  summarizedReasonEn: string;
-  summarizedReasonHi: string;
-  counterArgumentEn: string;
-  counterArgumentHi: string;
-  precedentStrength: PrecedentStrength;
-  citedSections: string[];
+  chargeAnalysisEn?: string;
+  chargeAnalysisHi?: string;
+  summarizedReasonEn?: string;
+  summarizedReasonHi?: string;
+  counterArgumentEn?: string;
+  counterArgumentHi?: string;
+  precedentStrength?: PrecedentStrength;
+  citedSections?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -188,17 +182,18 @@ function buildTextSystemPrompt(
   const rulesDigest = buildRulesDigest(rules);
   const rulebooksContext = buildRulebooksContext(rulebooks);
 
-  return `You are ContractGuard, India's most rigorous legal-clause matching engine for consumer contracts. You are the last line of defence against builders, banks, and employers who insert illegal clauses into agreements.
-
-Your job: read the user's contract text and identify every clause that matches one of the rules in the supplied RULES list. For every match, you must produce a DEEP LEGAL ANALYSIS that is specific enough to silence any lawyer or fraud.
+  return `You are ContractGuard, a strict legal-clause matching engine for Indian consumer contracts.
+Your job: read the user's contract text and identify every clause that matches one of the rules in the supplied RULES list.
+You must ONLY match rules that appear in the RULES list — never invent a rule, never invent a legal basis, never invent a statute.
+For every match you must quote the EXACT text snippet from the contract that triggered the match (no paraphrasing, must be a verbatim substring of the contract text).
 
 SECTOR: ${sector}
 
 == RULES (id | category | severity | legal_basis | pattern | charge info) ==
-${rulesDigest}
+ ${rulesDigest}
 
 == FULL-TEXT RULEBOOKS (actual statutory text — read these before matching) ==
-${rulebooksContext}
+ ${rulebooksContext}
 
 == OUTPUT FORMAT — return ONLY a JSON object, no prose, no markdown fences ==
 {
@@ -208,44 +203,33 @@ ${rulebooksContext}
       "snippet": "<verbatim text from the contract, max 400 chars>",
       "confidence": "high|medium|low",
       "notes": "<optional short note>",
-
       "chargeValidity": "valid|invalid|partially_valid|not_applicable",
-      "chargeExtracted": "<the exact charge/cost/fee mentioned in the clause, e.g. '25% of total consideration' or 'Rs. 5 per sq.ft. per month' or '4% prepayment penalty'>",
-      "permittedCharge": "<what the law actually permits, e.g. 'max 10% of booking amount' or '0% — prohibited by RBI circular' or 'actuals only, must be in KFS'>",
-      "chargeAnalysisEn": "<2-4 sentences explaining WHY the charge is valid/invalid, citing the specific statute section and the reasoning. Be specific.>",
+      "chargeExtracted": "<the exact charge/cost/fee mentioned in the clause>",
+      "permittedCharge": "<what the law actually permits>",
+      "chargeAnalysisEn": "<2-4 sentences explaining WHY the charge is valid/invalid, citing the specific statute section>",
       "chargeAnalysisHi": "<same analysis in Hindi (Devanagari)>",
-      "summarizedReasonEn": "<1-2 sentences. The single most powerful line. This is what the user reads to understand the issue.>",
+      "summarizedReasonEn": "<1-2 sentences. The single most powerful line.>",
       "summarizedReasonHi": "<same in Hindi>",
-      "counterArgumentEn": "<a ready-to-use statement the user can copy-paste and send to the builder/bank/employer. Must be firm, cite the specific section, and demand the correction.>",
+      "counterArgumentEn": "<a ready-to-use statement the user can copy-paste and send to the builder/bank/employer>",
       "counterArgumentHi": "<same counter-argument in Hindi>",
       "precedentStrength": "statutory|binding|persuasive|regulatory",
-      "citedSections": ["<specific section numbers, e.g. 'Section 18(1)', 'Pioneer Urban Land (2019) 8 SCC 473'>"]
+      "citedSections": ["<specific section numbers>"]
     }
   ],
   "roadmapNote": "<optional — only if the contract was not in English/Hindi/Hinglish>"
 }
 
-== RULES OF THE GAME — READ CAREFULLY ==
-1. PRECISION OVER RECALL. Only match a clause if it CLEARLY matches a rule. Do not invent rules.
-2. CHARGE VALIDATION IS MANDATORY for rules where involves_charge_validation is true. You must:
-   a. Extract the exact charge/cost/fee from the clause (chargeExtracted)
-   b. State what the law permits (permittedCharge) — use the rule's permitted_charge field AND the full-text rulebooks
-   c. Classify as valid / invalid / partially_valid / not_applicable
-   d. Explain WHY in 2-4 sentences with the specific statutory reasoning (chargeAnalysisEn)
-3. THE SUMMARIZED REASON must be 1-2 sentences. It is the headline. Make it powerful and specific. No hedging.
-4. THE COUNTER-ARGUMENT must be a complete, ready-to-send statement. It must cite the specific section number and state the legal entitlement clearly. The user should be able to copy-paste it into an email to the builder/bank/employer.
-5. CITED SECTIONS must be specific. 'Section 18' is good. 'RERA' is bad. Include judgment citations where relevant (e.g. 'Pioneer Urban Land (2019) 8 SCC 473').
-6. PRECEDENT STRENGTH:
-   - 'statutory' = black-letter law (an Act passed by Parliament)
-   - 'binding' = Supreme Court judgment
-   - 'persuasive' = High Court judgment or tribunal order
-   - 'regulatory' = RBI / BIS / RERA circular or guideline
-7. READ THE FULL-TEXT RULEBOOKS. If a rulebook is provided, quote the actual statutory language in your chargeAnalysis. Do not paraphrase the statute — quote the key phrase.
-8. If the contract text is not in English/Hindi/Hinglish, translate internally to English before matching and add a roadmapNote.
+RULES OF THE GAME:
+1. PRECISION OVER RECALL. Only match a clause if it CLEARLY matches a rule.
+2. CHARGE VALIDATION IS MANDATORY for rules where involves_charge_validation is true.
+3. THE SUMMARIZED REASON must be 1-2 sentences. Powerful and specific.
+4. THE COUNTER-ARGUMENT must be a complete, ready-to-send statement citing the specific section.
+5. CITED SECTIONS must be specific (e.g. 'Section 18(1)', not just 'RERA').
+6. PRECEDENT STRENGTH: statutory=Act, binding=SC judgment, persuasive=HC judgment, regulatory=circular.
+7. READ THE FULL-TEXT RULEBOOKS. Quote the actual statutory language.
+8. If the contract is not in English/Hindi/Hinglish, translate internally and add a roadmapNote.
 9. Snippets must be at most 400 characters, verbatim from the contract.
-10. Do not match the same rule twice with the same snippet.
-11. Return at most one match per rule id.
-12. If a clause does not involve a charge/cost, set chargeValidity to "not_applicable" and leave chargeExtracted/permittedCharge empty — but still fill in summarizedReasonEn, counterArgumentEn, citedSections, and precedentStrength.`;
+10. Return at most one match per rule id.`;
 }
 
 function buildTextUserPrompt(
@@ -266,7 +250,7 @@ DOCUMENT FILENAME: ${parsed.filename}
 
 CONTRACT TEXT:
 """
-${(parsed.text ?? "").slice(0, 60_000)}
+ ${(parsed.text ?? "").slice(0, 60_000)}
 """`;
 }
 
@@ -277,7 +261,7 @@ function buildVisionSystemPrompt(
 ): string {
   return (
     buildTextSystemPrompt(rules, sector, rulebooks) +
-    `\n\nADDITIONAL: The contract is provided as an IMAGE. Use OCR-like reading of the image to extract the contract text, then apply the same matching rules. If the image is illegible or not a contract, return {"matches": []} with a roadmapNote explaining the issue.`
+    `\n\nADDITIONAL: The contract is provided as an IMAGE. Use OCR-like reading of the image to extract the contract text, then apply the same matching rules.`
   );
 }
 
@@ -471,32 +455,12 @@ function fallbackMatch(
     const confidence =
       hits.length >= 4 ? "high" : hits.length >= 3 ? "medium" : "low";
     const involvesCharge = rule.involvesChargeValidation ?? false;
-    const chargeValidity: ChargeValidity = involvesCharge
-      ? "invalid"
-      : "not_applicable";
-    const permittedCharge = rule.permittedCharge ?? (involvesCharge ? "As per statute" : undefined);
 
     matches.push({
       ruleId: rule.id,
       snippet,
       confidence,
       notes: `Fallback match on keywords: ${hits.slice(0, 4).join(", ")}.`,
-      chargeValidity,
-      chargeExtracted: involvesCharge
-        ? "(extracted from snippet — run with Groq for precise extraction)"
-        : undefined,
-      permittedCharge,
-      chargeAnalysisEn: rule.plainEnglishTemplate.replace("{clause}", snippet),
-      chargeAnalysisHi: rule.plainHindiTemplate.replace("{clause}", snippet),
-      summarizedReasonEn: `${rule.legal_basis} is violated by this clause. ${involvesCharge ? `The permitted charge is: ${permittedCharge}.` : ""}`,
-      summarizedReasonHi: `${rule.legal_basis} इस धारा द्वारा उल्लंघन किया गया है।`,
-      counterArgumentEn: `Under ${rule.legal_basis}, this clause is not enforceable. I request you to revise the agreement to comply with the statutory requirement. Failing which, I reserve the right to approach the appropriate authority.`,
-      counterArgumentHi: `${rule.legal_basis} के तहत, यह धारा लागू नहीं होती। मैं आपसे अनुरोध करता/करती हूँ कि आप समझौते को वैधानिक आवश्यकता के अनुसार संशोधित करें।`,
-      precedentStrength:
-        rule.legal_basis.includes("vs") || rule.legal_basis.includes("v.")
-          ? "binding"
-          : "statutory",
-      citedSections: [rule.legal_basis],
     });
   }
 
@@ -600,7 +564,8 @@ export async function runSectorPipeline(
     }
   }
 
-  // Resolve raw matches to full MatchedClause objects
+  // Resolve raw matches to full MatchedClause objects.
+  // Deep-research fields are optional — only included if the model returned them.
   const rulesById = new Map<string, Rule>(rules.map((r) => [r.id, r]));
   const clauses: MatchedClause[] = [];
   for (const m of raw.matches) {
@@ -618,21 +583,20 @@ export async function runSectorPipeline(
       explanationHi: rendered.hi,
       legalBasis: rule.legal_basis,
       roadmapNote: m.notes || raw.roadmapNote,
-      chargeValidity: m.chargeValidity ?? "not_applicable",
-      chargeExtracted: m.chargeExtracted,
-      permittedCharge: m.permittedCharge ?? rule.permittedCharge,
-      chargeAnalysisEn: m.chargeAnalysisEn ?? rendered.en,
-      chargeAnalysisHi: m.chargeAnalysisHi ?? rendered.hi,
-      summarizedReasonEn: m.summarizedReasonEn ?? rendered.en,
-      summarizedReasonHi: m.summarizedReasonHi ?? rendered.hi,
-      counterArgumentEn:
-        m.counterArgumentEn ??
-        `Under ${rule.legal_basis}, this clause is not enforceable.`,
-      counterArgumentHi:
-        m.counterArgumentHi ??
-        `${rule.legal_basis} के तहत, यह धारा लागू नहीं होती।`,
-      precedentStrength: m.precedentStrength ?? "statutory",
-      citedSections: m.citedSections ?? [rule.legal_basis],
+      // Deep-research fields — only included if the model returned them
+      ...(m.chargeValidity !== undefined && { chargeValidity: m.chargeValidity }),
+      ...(m.chargeExtracted !== undefined && { chargeExtracted: m.chargeExtracted }),
+      ...(m.permittedCharge !== undefined && {
+        permittedCharge: m.permittedCharge ?? rule.permittedCharge,
+      }),
+      ...(m.chargeAnalysisEn !== undefined && { chargeAnalysisEn: m.chargeAnalysisEn }),
+      ...(m.chargeAnalysisHi !== undefined && { chargeAnalysisHi: m.chargeAnalysisHi }),
+      ...(m.summarizedReasonEn !== undefined && { summarizedReasonEn: m.summarizedReasonEn }),
+      ...(m.summarizedReasonHi !== undefined && { summarizedReasonHi: m.summarizedReasonHi }),
+      ...(m.counterArgumentEn !== undefined && { counterArgumentEn: m.counterArgumentEn }),
+      ...(m.counterArgumentHi !== undefined && { counterArgumentHi: m.counterArgumentHi }),
+      ...(m.precedentStrength !== undefined && { precedentStrength: m.precedentStrength }),
+      ...(m.citedSections !== undefined && { citedSections: m.citedSections }),
     });
   }
 
