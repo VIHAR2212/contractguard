@@ -30,6 +30,7 @@ import {
   ArrowRight,
   ArrowLeft,
   Check,
+  Download,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -84,10 +85,7 @@ function riskTone(score: number): { label: string; color: string } {
 }
 
 // ---------------------------------------------------------------------------
-// Motion — one restrained vocabulary reused everywhere: a short fade+rise
-// on entrance, staggered by container, and a single scroll-reveal used for
-// every section below the fold. No bounce, no rotation, no glow — the
-// same discipline the rest of the page already holds itself to.
+// Motion — one restrained vocabulary reused everywhere
 // ---------------------------------------------------------------------------
 
 const staggerContainer: Variants = {
@@ -156,7 +154,6 @@ export default function Home() {
     setStage({ kind: "idle" });
   }, []);
 
-  // Click a format chip → open the file picker filtered to that type
   const onChipClick = useCallback((type: string) => {
     setSelectedFileType(type);
     setShowPaste(false);
@@ -186,8 +183,6 @@ export default function Home() {
     setStage({ kind: "uploading" });
     try {
       let res: Response;
-      // Paste mode takes priority — a stale file from a previous upload
-      // must never hijack the paste path.
       const trimmedNotes = userNotes.trim();
       if (showPaste) {
         if (pastedText.trim().length < 30) {
@@ -253,7 +248,7 @@ export default function Home() {
       }}
     >
       {/* ============================================================
-          NAV — 59px, frosted glass, 1px #242424 bottom, zero color
+          NAV
           ============================================================ */}
       <motion.header
         initial={{ y: -20, opacity: 0 }}
@@ -263,7 +258,6 @@ export default function Home() {
         style={{ height: 59, borderBottom: "1px solid #242424" }}
       >
         <div className="mx-auto flex items-center justify-between px-6 h-full" style={{ maxWidth: 1200 }}>
-          {/* Left: brand — monochrome mark, no gradient */}
           <div className="flex items-center gap-2.5">
             <div
               className="flex items-center justify-center"
@@ -290,7 +284,6 @@ export default function Home() {
             </span>
           </div>
 
-          {/* Center: ghost nav (desktop only) */}
           <nav
             className="hidden md:flex items-center gap-7"
             style={{ position: "absolute", left: "50%", transform: "translateX(-50%)" }}
@@ -316,7 +309,6 @@ export default function Home() {
             ))}
           </nav>
 
-          {/* Right: UI lang switcher + outlined ghost CTA (grey, not blue) */}
           <div className="flex items-center gap-3">
             <div className="flex items-center rounded-md overflow-hidden" style={{ border: "1px solid #242424" }}>
               {UI_LANGS.map((l) => (
@@ -348,11 +340,10 @@ export default function Home() {
       </motion.header>
 
       {/* ============================================================
-          HERO — DM Serif Display, the only place this face appears
+          HERO
           ============================================================ */}
       <section className="w-full" style={{ paddingTop: 96, paddingBottom: 72 }}>
         <div className="mx-auto px-6" style={{ maxWidth: 1200 }}>
-          {/* Announcement pill — static, no motion, no color */}
           <div className="flex justify-center mb-8">
             <a
               href="#transparency"
@@ -377,7 +368,6 @@ export default function Home() {
             </a>
           </div>
 
-          {/* Hero headline — DM Serif Display, 96px desktop / 40px mobile */}
           <h1
             className="text-center mx-auto"
             style={{
@@ -394,7 +384,6 @@ export default function Home() {
             {t.hero_title}
           </h1>
 
-          {/* Subtitle — Inter, muted */}
           <p
             className="text-center mx-auto"
             style={{
@@ -410,7 +399,6 @@ export default function Home() {
             {t.hero_subtitle}
           </p>
 
-          {/* Hero quote */}
           <p
             className="text-center mx-auto"
             style={{
@@ -426,7 +414,6 @@ export default function Home() {
             {t.hero_quote}
           </p>
 
-          {/* CTA row — outlined neutral primary + ghost secondary */}
           <div className="flex items-center justify-center gap-4 mt-10 flex-wrap">
             <a href="#analyze" className="btn-outline-neutral" style={{ padding: "10px 18px", fontSize: 14 }}>
               {t.hero_cta}
@@ -452,11 +439,10 @@ export default function Home() {
       </section>
 
       {/* ============================================================
-          ANALYZER — file upload + selectors + report
+          ANALYZER
           ============================================================ */}
       <section id="analyze" className="w-full" style={{ paddingBottom: 120 }}>
         <div className="mx-auto px-6" style={{ maxWidth: 1200 }}>
-          {/* Section heading */}
           <div className="mb-10">
             <div
               style={{
@@ -483,11 +469,8 @@ export default function Home() {
             </h2>
           </div>
 
-          {/* Two-column grid: dropzone (left, wider) + selectors (right) */}
           <div className="grid lg:grid-cols-[1fr_360px] gap-4">
-            {/* ============================================================
-                Dropzone / paste — feature card surface, static
-                ============================================================ */}
+            {/* Dropzone */}
             <div style={{ background: "#0a0a0a", border: "1px solid #242424", borderRadius: 16, padding: 32 }}>
               {!showPaste ? (
                 <div
@@ -615,7 +598,6 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Mode switch — ghost buttons, neutral */}
               <div className="mt-6 flex items-center gap-4" style={{ paddingTop: 16, borderTop: "1px solid #242424" }}>
                 <button
                   type="button"
@@ -655,13 +637,8 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* Additional context box — where the client tells the AI
-                  what to look at first. e.g. "I got this from ABC Bank,
-                  page 5 looks suspicious, focus on the cancellation clause." */}
-              <div
-                className="mt-6"
-                style={{ paddingTop: 16, borderTop: "1px solid #242424" }}
-              >
+              {/* Additional context box */}
+              <div className="mt-6" style={{ paddingTop: 16, borderTop: "1px solid #242424" }}>
                 <div
                   style={{
                     fontFamily: "var(--font-inter), sans-serif",
@@ -696,26 +673,13 @@ export default function Home() {
                   onFocus={(e) => (e.currentTarget.style.borderColor = "#6b6b6b")}
                   onBlur={(e) => (e.currentTarget.style.borderColor = "#242424")}
                 />
-                <div
-                  style={{
-                    fontFamily: "var(--font-inter), sans-serif",
-                    fontSize: 11,
-                    color: "#6b6b6b",
-                    marginTop: 6,
-                    lineHeight: 1.4,
-                  }}
-                >
+                <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 11, color: "#6b6b6b", marginTop: 6, lineHeight: 1.4 }}>
                   The AI will read this before analysing the contract and pay extra attention to anything you flag here.
                 </div>
               </div>
 
-              {/* File-type option chips — click to open the file picker
-                  filtered to that type. Replaces the old 3-column format
-                  hints with a cleaner, actionable row of buttons. */}
-              <div
-                className="mt-6"
-                style={{ paddingTop: 16, borderTop: "1px solid #242424" }}
-              >
+              {/* File-type option chips */}
+              <div className="mt-6" style={{ paddingTop: 16, borderTop: "1px solid #242424" }}>
                 <div
                   style={{
                     fontFamily: "var(--font-inter), sans-serif",
@@ -766,11 +730,8 @@ export default function Home() {
               </div>
             </div>
 
-            {/* ============================================================
-                Selectors + Analyze button
-                ============================================================ */}
+            {/* Selectors + Analyze button */}
             <div className="flex flex-col gap-6" style={{ background: "#0a0a0a", border: "1px solid #242424", borderRadius: 16, padding: 32 }}>
-              {/* Sector selector */}
               <div>
                 <div
                   style={{
@@ -813,7 +774,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Document language selector */}
               <div>
                 <div
                   style={{
@@ -856,7 +816,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Analyze button — the single primary action, neutral outline */}
               <button
                 onClick={analyze}
                 disabled={!canAnalyze}
@@ -895,7 +854,6 @@ export default function Home() {
                 )}
               </button>
 
-              {/* Progress lines */}
               {isBusy && (
                 <div className="flex flex-col gap-2" style={{ paddingTop: 16, borderTop: "1px solid #242424" }}>
                   <ProgressLine done={stage.kind !== "uploading"} label={t.status_uploading} />
@@ -907,7 +865,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Error */}
           <AnimatePresence>
             {stage.kind === "error" && (
               <motion.div
@@ -930,14 +887,13 @@ export default function Home() {
               </motion.div>
             )}
 
-            {/* Report */}
             {stage.kind === "done" && <ReportView result={stage.result} uiLang={uiLang} onBack={reset} t={t} />}
           </AnimatePresence>
         </div>
       </section>
 
       {/* ============================================================
-          TRANSPARENCY — hairline-divided, no color, no motion
+          TRANSPARENCY
           ============================================================ */}
       <section id="transparency" className="w-full" style={{ paddingTop: 80, paddingBottom: 120, borderTop: "1px solid #242424" }}>
         <div className="mx-auto px-6" style={{ maxWidth: 1200 }}>
@@ -1000,7 +956,7 @@ export default function Home() {
       </section>
 
       {/* ============================================================
-          FOOTER — minimal, two links
+          FOOTER
           ============================================================ */}
       <footer className="mt-auto" style={{ borderTop: "1px solid #242424", padding: "32px 0" }}>
         <div className="mx-auto px-6 flex items-center justify-between" style={{ maxWidth: 1200 }}>
@@ -1024,7 +980,7 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* Scoped styles for the one reusable button pattern in the system */}
+      {/* Scoped styles for the one reusable button pattern */}
       <style jsx global>{`
         .btn-outline-neutral {
           display: inline-flex;
@@ -1100,6 +1056,281 @@ function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; c
 }
 
 // ===========================================================================
+// PDF export — generates a white-background, black-text PDF of the report
+// with colored severity indicators. Uses jsPDF (client-side, no server
+// needed). Font sizes chosen for readability: 11-12pt body, 20pt title,
+// 16pt section headings. About 8-10 words per line on A4 — readable,
+// not tiny T&C text, not too big.
+// ===========================================================================
+
+async function exportReportToPdf(result: AnalyzeResponse, uiLang: UiLanguage) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+
+  const pageW = 210;
+  const pageH = 297;
+  const margin = 18;
+  const contentW = pageW - margin * 2;
+  let y = margin;
+
+  // Severity colors (RGB) — muted but distinct, print-friendly
+  const SEV_RGB: Record<Severity, [number, number, number]> = {
+    high: [201, 130, 127],     // muted red
+    medium: [201, 171, 106],   // muted amber
+    low: [127, 157, 179],      // muted blue
+  };
+
+  const isHindi = uiLang === "hi";
+
+  function ensureSpace(needed: number) {
+    if (y + needed > pageH - margin - 10) {
+      doc.addPage();
+      y = margin;
+    }
+  }
+
+  function addText(
+    text: string,
+    opts: {
+      size?: number;
+      bold?: boolean;
+      color?: [number, number, number];
+      x?: number;
+      maxWidth?: number;
+      lineHeight?: number;
+    } = {}
+  ) {
+    const size = opts.size ?? 12;
+    const bold = opts.bold ?? false;
+    const color = opts.color ?? [40, 40, 40];
+    const x = opts.x ?? margin;
+    const maxWidth = opts.maxWidth ?? contentW;
+    const lineHeight = opts.lineHeight ?? size * 0.45;
+
+    doc.setFont("helvetica", bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    doc.setTextColor(color[0], color[1], color[2]);
+
+    const lines = doc.splitTextToSize(text, maxWidth) as string[];
+    for (const line of lines) {
+      ensureSpace(lineHeight + 1);
+      doc.text(line, x, y);
+      y += lineHeight;
+    }
+  }
+
+  function addSeparator() {
+    ensureSpace(6);
+    doc.setDrawColor(220, 220, 220);
+    doc.setLineWidth(0.3);
+    doc.line(margin, y, pageW - margin, y);
+    y += 5;
+  }
+
+  function addRect(
+    x: number,
+    yPos: number,
+    w: number,
+    h: number,
+    fill: [number, number, number],
+    radius: number = 2
+  ) {
+    doc.setFillColor(fill[0], fill[1], fill[2]);
+    doc.roundedRect(x, yPos, w, h, radius, radius, "F");
+  }
+
+  // -----------------------------------------------------------------------
+  // HEADER
+  // -----------------------------------------------------------------------
+  addText("ContractGuard — Risk Report", { size: 20, bold: true, color: [20, 20, 20] });
+  y += 2;
+
+  const dateStr = new Date().toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  addText(`Generated on ${dateStr}`, { size: 10, color: [140, 140, 140] });
+  y += 4;
+
+  const tone =
+    result.riskScore >= 50
+      ? { label: "High risk", color: [201, 130, 127] as [number, number, number] }
+      : result.riskScore >= 20
+      ? { label: "Medium risk", color: [201, 171, 106] as [number, number, number] }
+      : { label: "Low risk", color: [127, 174, 142] as [number, number, number] };
+
+  addSeparator();
+
+  // Risk score number + label
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(36);
+  doc.setTextColor(20, 20, 20);
+  doc.text(String(result.riskScore), margin, y + 12);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(11);
+  doc.setTextColor(140, 140, 140);
+  doc.text("/ 100", margin + doc.getTextWidth(String(result.riskScore)) + 3, y + 12);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.setTextColor(tone.color[0], tone.color[1], tone.color[2]);
+  doc.text(tone.label, margin, y + 20);
+
+  // Risk score bar (colored)
+  const barY = y + 24;
+  const barH = 4;
+  const barW = contentW;
+  doc.setFillColor(235, 235, 235);
+  doc.roundedRect(margin, barY, barW, barH, 1.5, 1.5, "F");
+  doc.setFillColor(tone.color[0], tone.color[1], tone.color[2]);
+  const filledW = Math.max(barW * (result.riskScore / 100), 2);
+  doc.roundedRect(margin, barY, filledW, barH, 1.5, 1.5, "F");
+
+  y = barY + barH + 6;
+
+  addText(
+    `Sector: ${result.sector}    |    Document language: ${result.docLanguage}    |    Rules considered: ${result.rulesConsidered}    |    Analysis time: ${result.pipelineMs} ms`,
+    { size: 9, color: [140, 140, 140] }
+  );
+
+  if (result.message) {
+    y += 2;
+    addText(`Note: ${result.message}`, { size: 9, color: [180, 140, 60] });
+  }
+
+  y += 6;
+  addSeparator();
+
+  // -----------------------------------------------------------------------
+  // CLAUSES
+  // -----------------------------------------------------------------------
+  addText(`Flagged clauses (${result.clauses.length})`, {
+    size: 16,
+    bold: true,
+    color: [20, 20, 20],
+  });
+  y += 4;
+
+  if (result.clauses.length === 0) {
+    addText(
+      "No high-risk clauses were matched. This is not legal advice — please have a lawyer review anything you're unsure about.",
+      { size: 11, color: [120, 120, 120] }
+    );
+  } else {
+    result.clauses.forEach((c, i) => {
+      const sevColor = SEV_RGB[c.severity];
+
+      // Clause header bar (colored severity indicator)
+      ensureSpace(14);
+      addRect(margin, y, 4, 10, sevColor, 1);
+      y += 2;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.setTextColor(80, 80, 80);
+      doc.text(`Clause ${String(i + 1).padStart(2, "0")}`, margin + 8, y + 3);
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(sevColor[0], sevColor[1], sevColor[2]);
+      doc.text(c.severity.toUpperCase(), margin + 32, y + 3);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(140, 140, 140);
+      doc.text(c.category, margin + 32 + 35, y + 3);
+
+      doc.setFont("courier", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(140, 140, 140);
+      const ruleIdText = c.ruleId;
+      const ruleIdW = doc.getTextWidth(ruleIdText);
+      doc.text(ruleIdText, pageW - margin - ruleIdW, y + 3);
+
+      y += 8;
+
+      // Snippet label
+      addText("From the document:", {
+        size: 9,
+        bold: true,
+        color: [140, 140, 140],
+      });
+      y += 1;
+
+      // Snippet in a light grey box
+      const snippetLines = doc.splitTextToSize(c.snippet, contentW - 6) as string[];
+      const snippetBoxH = snippetLines.length * 5 + 4;
+      ensureSpace(snippetBoxH + 4);
+      doc.setFillColor(248, 248, 248);
+      doc.roundedRect(margin, y, contentW, snippetBoxH, 1.5, 1.5, "F");
+      doc.setFont("courier", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(50, 50, 50);
+      let snippetY = y + 4;
+      for (const line of snippetLines) {
+        doc.text(line, margin + 3, snippetY);
+        snippetY += 5;
+      }
+      y += snippetBoxH + 3;
+
+      // Explanation
+      addText("Explanation:", {
+        size: 9,
+        bold: true,
+        color: [140, 140, 140],
+      });
+      y += 1;
+      const explanation = isHindi ? c.explanationHi : c.explanationEn;
+      addText(explanation, { size: 11, color: [40, 40, 40], lineHeight: 5.5 });
+      y += 3;
+
+      // Legal basis
+      addText("Legal basis:", {
+        size: 9,
+        bold: true,
+        color: [140, 140, 140],
+      });
+      y += 1;
+      addText(c.legalBasis, { size: 10, color: [100, 100, 160], lineHeight: 5 });
+
+      // Roadmap note
+      if (c.roadmapNote) {
+        y += 2;
+        addText(`Note: ${c.roadmapNote}`, { size: 9, color: [180, 140, 60] });
+      }
+
+      y += 6;
+
+      if (i < result.clauses.length - 1) {
+        addSeparator();
+        y += 2;
+      }
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // FOOTER on every page
+  // -----------------------------------------------------------------------
+  const pageCount = doc.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p++) {
+    doc.setPage(p);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(160, 160, 160);
+    doc.text(
+      "ContractGuard — AI contract review. This report is not legal advice. Consult a qualified advocate for your specific situation.",
+      margin,
+      pageH - 10
+    );
+    doc.text(`Page ${p} of ${pageCount}`, pageW - margin - 20, pageH - 10);
+  }
+
+  const filename = `contractguard-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+  doc.save(filename);
+}
+
+// ===========================================================================
 // Report view
 // ===========================================================================
 
@@ -1145,10 +1376,30 @@ function ReportView({
             {tone.label}
           </div>
         </div>
-        <button onClick={onBack} className="btn-outline-neutral" style={{ padding: "8px 12px", fontSize: 13, borderColor: "#242424", color: "#9a9a9a" }}>
-          <ArrowLeft style={{ width: 13, height: 13 }} />
-          {t.report_back}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => exportReportToPdf(result, uiLang)}
+            className="btn-outline-neutral"
+            style={{
+              padding: "8px 14px",
+              fontSize: 13,
+              borderColor: "#3a3a3a",
+              color: "#ffffff",
+              fontWeight: 700,
+            }}
+          >
+            <Download style={{ width: 13, height: 13 }} strokeWidth={2} />
+            Export as PDF
+          </button>
+          <button
+            onClick={onBack}
+            className="btn-outline-neutral"
+            style={{ padding: "8px 12px", fontSize: 13, borderColor: "#242424", color: "#9a9a9a" }}
+          >
+            <ArrowLeft style={{ width: 13, height: 13 }} />
+            {t.report_back}
+          </button>
+        </div>
       </div>
 
       {/* Risk score + meta */}
@@ -1179,7 +1430,6 @@ function ReportView({
         </div>
       </div>
 
-      {/* Optional warning */}
       {result.message && (
         <div className="mb-6 flex items-start gap-2" style={{ padding: 14, borderRadius: 8, border: "1px solid #242424", background: "#000000" }}>
           <AlertTriangle style={{ width: 13, height: 13, color: "#c9ab6a", flexShrink: 0, marginTop: 1 }} strokeWidth={1.5} />
@@ -1187,7 +1437,6 @@ function ReportView({
         </div>
       )}
 
-      {/* Clause list */}
       <div
         style={{
           fontFamily: "var(--font-inter), sans-serif",
@@ -1236,15 +1485,8 @@ function ReportView({
                   padding: "24px 24px 24px 22px",
                 }}
               >
-                {/* Top row: clause number + severity + category + rule ID */}
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
-                  <span
-                    style={{
-                      fontFamily: "var(--font-jetbrains-mono), monospace",
-                      fontSize: 11,
-                      color: "#6b6b6b",
-                    }}
-                  >
+                  <span style={{ fontFamily: "var(--font-jetbrains-mono), monospace", fontSize: 11, color: "#6b6b6b" }}>
                     §{String(i + 1).padStart(2, "0")}
                   </span>
                   <span
@@ -1280,92 +1522,35 @@ function ReportView({
                   >
                     {c.category}
                   </span>
-                  {/* Rule ID — code-identity mono, neutral grey (no violet) */}
                   <span style={{ fontFamily: "var(--font-jetbrains-mono), monospace", fontSize: 11, color: "#9a9a9a", marginLeft: "auto" }}>
                     {c.ruleId}
                   </span>
                 </div>
 
-                {/* Snippet */}
-                <div
-                  style={{
-                    fontFamily: "var(--font-inter), sans-serif",
-                    fontSize: 11,
-                    color: "#6b6b6b",
-                    marginBottom: 6,
-                    letterSpacing: "0.04em",
-                    textTransform: "uppercase",
-                    fontWeight: 500,
-                  }}
-                >
+                <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 11, color: "#6b6b6b", marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase", fontWeight: 500 }}>
                   {t.report_snippet}
                 </div>
-                <blockquote
-                  style={{
-                    fontFamily: "var(--font-jetbrains-mono), monospace",
-                    fontSize: 13,
-                    lineHeight: 1.6,
-                    color: "#e8e8e8",
-                    paddingLeft: 16,
-                    borderLeft: "2px solid #242424",
-                    marginBottom: 20,
-                    fontStyle: "normal",
-                  }}
-                >
+                <blockquote style={{ fontFamily: "var(--font-jetbrains-mono), monospace", fontSize: 13, lineHeight: 1.6, color: "#e8e8e8", paddingLeft: 16, borderLeft: "2px solid #242424", marginBottom: 20, fontStyle: "normal" }}>
                   {c.snippet}
                 </blockquote>
 
-                {/* Explanation */}
-                <div
-                  style={{
-                    fontFamily: "var(--font-inter), sans-serif",
-                    fontSize: 11,
-                    color: "#6b6b6b",
-                    marginBottom: 6,
-                    letterSpacing: "0.04em",
-                    textTransform: "uppercase",
-                    fontWeight: 500,
-                  }}
-                >
+                <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 11, color: "#6b6b6b", marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase", fontWeight: 500 }}>
                   {t.report_explanation}
                 </div>
                 <p style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 14, lineHeight: 1.6, color: "#e8e8e8", marginBottom: 20 }}>
                   {explanation}
                 </p>
 
-                {/* Legal basis */}
-                <div
-                  style={{
-                    fontFamily: "var(--font-inter), sans-serif",
-                    fontSize: 11,
-                    color: "#6b6b6b",
-                    marginBottom: 6,
-                    letterSpacing: "0.04em",
-                    textTransform: "uppercase",
-                    fontWeight: 500,
-                  }}
-                >
+                <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 11, color: "#6b6b6b", marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase", fontWeight: 500 }}>
                   {t.report_legal_basis}
                 </div>
                 <p style={{ fontFamily: "var(--font-jetbrains-mono), monospace", fontSize: 12, lineHeight: 1.5, color: "#abafb4" }}>
                   {c.legalBasis}
                 </p>
 
-                {/* Roadmap note */}
                 {c.roadmapNote && (
                   <>
-                    <div
-                      style={{
-                        fontFamily: "var(--font-inter), sans-serif",
-                        fontSize: 11,
-                        color: "#6b6b6b",
-                        marginTop: 16,
-                        marginBottom: 6,
-                        letterSpacing: "0.04em",
-                        textTransform: "uppercase",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 11, color: "#6b6b6b", marginTop: 16, marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase", fontWeight: 500 }}>
                       {t.report_roadmap_note}
                     </div>
                     <p style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 12, lineHeight: 1.5, color: "#c9ab6a" }}>
@@ -1378,6 +1563,32 @@ function ReportView({
           })}
         </div>
       )}
+
+      {/* Bottom Export button — prominent, full-width, bold */}
+      <div
+        className="mt-8"
+        style={{
+          paddingTop: 24,
+          borderTop: "1px solid #242424",
+          display: "flex",
+          justifyContent: "center",
+        }}
+      >
+        <button
+          onClick={() => exportReportToPdf(result, uiLang)}
+          className="btn-outline-neutral"
+          style={{
+            padding: "12px 24px",
+            fontSize: 14,
+            borderColor: "#3a3a3a",
+            color: "#ffffff",
+            fontWeight: 700,
+          }}
+        >
+          <Download style={{ width: 15, height: 15 }} strokeWidth={2} />
+          Export as PDF
+        </button>
+      </div>
     </motion.div>
   );
 }
