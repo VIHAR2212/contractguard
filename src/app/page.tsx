@@ -24,7 +24,7 @@
 // ===========================================================================
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 import {
   AlertTriangle,
   ArrowRight,
@@ -90,12 +90,12 @@ function riskTone(score: number): { label: string; color: string } {
 // same discipline the rest of the page already holds itself to.
 // ---------------------------------------------------------------------------
 
-const staggerContainer = {
+const staggerContainer: Variants = {
   hidden: {},
   show: { transition: { staggerChildren: 0.09, delayChildren: 0.05 } },
 };
 
-const fadeUp = {
+const fadeUp: Variants = {
   hidden: { opacity: 0, y: 14 },
   show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } },
 };
