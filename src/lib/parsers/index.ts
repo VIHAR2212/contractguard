@@ -3,9 +3,10 @@
 // ---------------------------------------------------------------------------
 // File parsing utilities for ContractGuard.
 //
-// PDF parsing uses `unpdf` (serverless-friendly pdfjs-dist wrapper) instead
-// of pdf-parse v2. unpdf handles custom font subsetting better and is built
-// for Vercel's serverless environment.
+// PDF parsing uses `unpdf` (serverless-friendly pdfjs-dist wrapper).
+// DOCX parsing uses `mammoth` (serverless-friendly .docx → text).
+// ZIP parsing uses `adm-zip`.
+// Image and plain-text are passthrough.
 //
 // If text extraction returns empty (scanned PDF or font-encoding issue),
 // the parser returns kind="pdf_no_text" so the API can return a clear
@@ -18,19 +19,12 @@ export type ParsedKind = "text" | "image" | "pdf_no_text";
 
 export interface ParsedDocument {
   kind: ParsedKind;
-  /** For "text": the extracted text. For "image": the original filename. */
   text?: string;
-  /** For "image": base64 (no data: prefix) of the bytes. */
   base64?: string;
-  /** For "image": the MIME media type, e.g. image/png. */
   mediaType?: string;
-  /** Filename the user uploaded, or "pasted.txt" for paste mode. */
   filename: string;
-  /** Best-effort detected language of the document text. */
   detectedLanguage?: DocLanguage;
-  /** For ZIP: every file we actually opened. */
   containedFiles?: string[];
-  /** Warnings (non-fatal issues we want surfaced in the report). */
   warnings: string[];
 }
 
@@ -40,6 +34,7 @@ export interface ParsedDocument {
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 const PDF_EXT = /\.pdf$/i;
+const DOCX_EXT = /\.(docx|doc)$/i;
 const TXT_EXT = /\.(txt|md|csv|json|log)$/i;
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -88,8 +83,6 @@ export function detectLanguage(text: string): DocLanguage {
 // ---------------------------------------------------------------------------
 
 async function parsePdf(bytes: Uint8Array, filename: string): Promise<ParsedDocument> {
-  // Guard against empty / 0-byte uploads — pdfjs-dist will crash the
-  // Vercel worker process on an empty buffer.
   if (!bytes || bytes.length === 0) {
     return {
       kind: "pdf_no_text",
@@ -108,7 +101,6 @@ async function parsePdf(bytes: Uint8Array, filename: string): Promise<ParsedDocu
     const cleaned = (text ?? "").trim();
 
     if (cleaned.length < 10) {
-      // Text extraction failed — likely a scanned PDF or font-encoding issue.
       return {
         kind: "pdf_no_text",
         text: "",
@@ -129,14 +121,61 @@ async function parsePdf(bytes: Uint8Array, filename: string): Promise<ParsedDocu
       warnings: [],
     };
   } catch (err) {
-    // Catch ANY error from unpdf — invalid PDF, encrypted PDF, corrupt
-    // header, worker crash, etc. Don't let it kill the Vercel function.
     return {
       kind: "pdf_no_text",
       text: "",
       filename,
       detectedLanguage: "en",
       warnings: [`Could not parse PDF: ${(err as Error).message}. Try pasting the contract text manually.`],
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DOCX parsing — uses mammoth (serverless-friendly)
+// ---------------------------------------------------------------------------
+
+async function parseDocx(bytes: Uint8Array, filename: string): Promise<ParsedDocument> {
+  if (!bytes || bytes.length === 0) {
+    return {
+      kind: "pdf_no_text",
+      text: "",
+      filename,
+      detectedLanguage: "en",
+      warnings: ["The uploaded file is 0 bytes. Please re-select the file and try again."],
+    };
+  }
+
+  try {
+    const mammoth = await import("mammoth");
+    const buffer = Buffer.from(bytes);
+    const result = await mammoth.extractRawText({ buffer });
+    const text = (result?.value ?? "").trim();
+
+    if (text.length < 10) {
+      return {
+        kind: "pdf_no_text",
+        text: "",
+        filename,
+        detectedLanguage: "en",
+        warnings: ["DOCX text extraction returned no readable text. The file may be empty or corrupt."],
+      };
+    }
+
+    return {
+      kind: "text",
+      text,
+      filename,
+      detectedLanguage: detectLanguage(text),
+      warnings: [],
+    };
+  } catch (err) {
+    return {
+      kind: "pdf_no_text",
+      text: "",
+      filename,
+      detectedLanguage: "en",
+      warnings: [`Could not parse DOCX: ${(err as Error).message}. Try pasting the contract text manually.`],
     };
   }
 }
@@ -198,6 +237,13 @@ async function parseZip(bytes: Uint8Array, filename: string): Promise<ParsedDocu
           textParts.push(`--- ${name} ---\n${sub.text}`);
         }
         if (sub.warnings.length) warnings.push(...sub.warnings);
+      } else if (DOCX_EXT.test(name)) {
+        const sub = await parseDocx(new Uint8Array(data), name);
+        containedFiles.push(name);
+        if (sub.text) {
+          textParts.push(`--- ${name} ---\n${sub.text}`);
+        }
+        if (sub.warnings.length) warnings.push(...sub.warnings);
       } else if (TXT_EXT.test(name)) {
         const t = data.toString("utf-8");
         containedFiles.push(name);
@@ -247,6 +293,9 @@ export async function parseFile(
   try {
     if (PDF_EXT.test(name) || mime === "application/pdf") {
       return await parsePdf(bytes, filename);
+    }
+    if (DOCX_EXT.test(name) || mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || mime === "application/msword") {
+      return await parseDocx(bytes, filename);
     }
     if (name.endsWith(".zip") || mime === "application/zip" || mime === "application/x-zip-compressed") {
       return await parseZip(bytes, filename);
