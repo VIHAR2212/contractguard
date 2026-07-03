@@ -133,9 +133,27 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
     }
 
     // ------------------------------------------------------------------
+    // Handle PDFs where text extraction failed (scanned PDF or font issue)
+    // ------------------------------------------------------------------
+    if (parsed.kind === "pdf_no_text") {
+      return NextResponse.json<AnalyzeResponse>(
+        {
+          status: "success",
+          riskScore: 0,
+          clauses: [],
+          sector,
+          docLanguage,
+          message: "This PDF has no extractable text layer (it's either scanned or uses custom font encoding that the PDF parser cannot decode). Please either: (1) paste the contract text manually using the paste mode, or (2) take a screenshot of the PDF and upload it as an image — the vision model can OCR it.",
+          rulesConsidered: 0,
+          pipelineMs: Date.now() - startTime,
+        },
+        { status: 200 }
+      );
+    }
+
+    // ------------------------------------------------------------------
     // Run the pipeline — with a hard 9-second budget on Vercel Hobby
-    // (leaves 1s buffer before the 10s kill). If the pipeline doesn't
-    // finish in time, we catch it and return a clean error.
+    // (leaves 1s buffer before the 10s kill).
     // ------------------------------------------------------------------
     const pipelinePromise = runSectorPipeline({ parsed, sector, docLanguage });
 
