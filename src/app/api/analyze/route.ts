@@ -1,3 +1,19 @@
+// ===========================================================================
+// /app/api/analyze/route.ts
+// ---------------------------------------------------------------------------
+// ContractGuard — main analysis endpoint.
+//
+// Accepts two request shapes:
+//   (1) multipart/form-data — fields: file (File), sector, docLanguage
+//   (2) application/json     — fields: pastedText, sector, docLanguage
+//
+// Returns a strict AnalyzeResponse JSON object that the frontend renders
+// directly into the risk report.
+//
+// `runtime = 'nodejs'` is mandatory because pdf-parse and adm-zip both
+// touch the Node `fs` module.
+// ===========================================================================
+
 import { NextRequest, NextResponse } from "next/server";
 import type { AnalyzeResponse, DocLanguage, Sector } from "@/lib/types";
 import { parseFile, parsePastedText } from "@/lib/parsers";
@@ -62,6 +78,9 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
       if (!(file instanceof File)) {
         return errorResponse("No 'file' field found in multipart upload.");
       }
+      if (file.size === 0) {
+        return errorResponse("The uploaded file is empty (0 bytes). Please re-select the file and try again — some browsers lose the file reference when the page is reloaded.");
+      }
       if (file.size > MAX_BYTES) {
         return errorResponse(`File too large. Max ${MAX_BYTES / 1024 / 1024} MB.`);
       }
@@ -114,16 +133,14 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
     }
 
     // ------------------------------------------------------------------
-    // Run the pipeline — with a hard 8-second budget on Vercel Hobby
-    // (leaves 2s buffer before the 10s kill). If the pipeline doesn't
-    // finish in time, we catch it and return the keyword fallback.
+    // Run the pipeline — with a hard 9-second budget on Vercel Hobby
+    // (leaves 1s buffer before the 10s kill). If the pipeline doesn't
+    // finish in time, we catch it and return a clean error.
     // ------------------------------------------------------------------
     const pipelinePromise = runSectorPipeline({ parsed, sector, docLanguage });
 
-    // Vercel Hobby = 10s hard kill. We race the pipeline against an 8s
-    // timeout so we can return a clean error instead of ERR_FAILED.
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("PIPELINE_TIMEOUT_8S")), 8000)
+      setTimeout(() => reject(new Error("PIPELINE_TIMEOUT_9S")), 9000)
     );
 
     let result;
