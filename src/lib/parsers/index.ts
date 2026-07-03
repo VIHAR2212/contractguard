@@ -327,3 +327,58 @@ export function parsePastedText(text: string): ParsedDocument {
     warnings: [],
   };
 }
+
+// ---------------------------------------------------------------------------
+// Chunking — split large documents into smaller pieces for Groq
+// ---------------------------------------------------------------------------
+// Groq on Vercel free tier has ~10s limit. A 27-page contract = ~15K tokens
+// takes 15-30s on 70B model. We split into chunks of ~3K tokens (~12KB)
+// and process them in parallel, then merge.
+//
+// Chunk size: 12,000 chars (~3K tokens) — small enough for 70B in ~3s.
+// Overlap: 500 chars — so clauses split across chunk boundaries still get
+// caught by at least one chunk.
+
+export const CHUNK_SIZE = 12_000;
+export const CHUNK_OVERLAP = 500;
+export const MAX_CHUNKS = 8; // hard cap so a huge file doesn't spawn 50 Groq calls
+
+export interface TextChunk {
+  index: number;
+  total: number;
+  text: string;
+  startChar: number;
+}
+
+/**
+ * Split a long text into overlapping chunks. Each chunk is ~CHUNK_SIZE
+ * characters with CHUNK_OVERLAP characters of overlap with the previous
+ * chunk so clauses split across boundaries still get caught.
+ */
+export function chunkText(text: string): TextChunk[] {
+  if (!text || text.length <= CHUNK_SIZE) {
+    return [{ index: 0, total: 1, text, startChar: 0 }];
+  }
+
+  const chunks: TextChunk[] = [];
+  let pos = 0;
+  let chunkIndex = 0;
+
+  while (pos < text.length && chunkIndex < MAX_CHUNKS) {
+    const end = Math.min(pos + CHUNK_SIZE, text.length);
+    const chunkTextSlice = text.slice(pos, end);
+    chunks.push({
+      index: chunkIndex,
+      total: 0, // filled in after loop
+      text: chunkTextSlice,
+      startChar: pos,
+    });
+    chunkIndex++;
+    if (end >= text.length) break;
+    pos = end - CHUNK_OVERLAP; // overlap so boundary clauses get caught
+  }
+
+  // Fill in total
+  for (const c of chunks) c.total = chunks.length;
+  return chunks;
+}
