@@ -131,6 +131,8 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [pastedText, setPastedText] = useState<string>("");
   const [showPaste, setShowPaste] = useState(false);
+  const [userNotes, setUserNotes] = useState<string>("");
+  const [selectedFileType, setSelectedFileType] = useState<string>("");
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const [stage, setStage] = useState<Stage>({ kind: "idle" });
@@ -143,6 +145,8 @@ export default function Home() {
     setStage({ kind: "idle" });
     setFile(null);
     setPastedText("");
+    setUserNotes("");
+    setSelectedFileType("");
   }, []);
 
   const onPickFile = useCallback((f: File | null) => {
@@ -150,6 +154,23 @@ export default function Home() {
     setFile(f);
     setShowPaste(false);
     setStage({ kind: "idle" });
+  }, []);
+
+  // Click a format chip → open the file picker filtered to that type
+  const onChipClick = useCallback((type: string) => {
+    setSelectedFileType(type);
+    setShowPaste(false);
+    if (inputRef.current) {
+      const acceptMap: Record<string, string> = {
+        pdf: ".pdf",
+        docx: ".docx,.doc",
+        image: ".png,.jpg,.jpeg,.webp,.gif",
+        zip: ".zip",
+        text: ".txt,.md,.csv,.json",
+      };
+      inputRef.current.accept = acceptMap[type] ?? "";
+    }
+    inputRef.current?.click();
   }, []);
 
   const onDrop = useCallback(
@@ -165,20 +186,36 @@ export default function Home() {
     setStage({ kind: "uploading" });
     try {
       let res: Response;
-      if (file) {
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("sector", sector);
-        fd.append("docLanguage", docLanguage);
-        setStage({ kind: "parsing" });
-        res = await fetch("/api/analyze", { method: "POST", body: fd });
-      } else if (pastedText.trim().length >= 30) {
+      // Paste mode takes priority — a stale file from a previous upload
+      // must never hijack the paste path.
+      const trimmedNotes = userNotes.trim();
+      if (showPaste) {
+        if (pastedText.trim().length < 30) {
+          setStage({
+            kind: "error",
+            message: "Please paste at least 30 characters of text.",
+          });
+          return;
+        }
         setStage({ kind: "matching" });
         res = await fetch("/api/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pastedText, sector, docLanguage }),
+          body: JSON.stringify({
+            pastedText,
+            sector,
+            docLanguage,
+            userNotes: trimmedNotes || undefined,
+          }),
         });
+      } else if (file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("sector", sector);
+        fd.append("docLanguage", docLanguage);
+        if (trimmedNotes) fd.append("userNotes", trimmedNotes);
+        setStage({ kind: "parsing" });
+        res = await fetch("/api/analyze", { method: "POST", body: fd });
       } else {
         setStage({
           kind: "error",
@@ -195,7 +232,7 @@ export default function Home() {
     } catch (err) {
       setStage({ kind: "error", message: (err as Error).message });
     }
-  }, [file, pastedText, sector, docLanguage]);
+  }, [showPaste, file, pastedText, userNotes, sector, docLanguage]);
 
   const isBusy =
     stage.kind === "uploading" || stage.kind === "parsing" || stage.kind === "matching";
@@ -209,12 +246,6 @@ export default function Home() {
     <div
       className="min-h-screen flex flex-col"
       style={{
-        // Transparent on purpose — body (globals.css) already paints the
-        // black base layer, and FlyingPapersBackground sits between body
-        // and this div. Leaving this opaque would hide the storm behind
-        // every empty stretch of page. Cards and panels still set their
-        // own #0a0a0a / #000000 backgrounds, so nothing readable loses
-        // contrast — only the true negative space around them.
         position: "relative",
         zIndex: 1,
         color: "#e8e8e8",
@@ -308,15 +339,10 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <motion.a
-              href="#analyze"
-              whileHover={{ scale: 1.04 }}
-              whileTap={tapScale}
-              className="btn-outline-neutral"
-            >
+            <a href="#analyze" className="btn-outline-neutral">
               {t.hero_cta}
               <ArrowRight style={{ width: 13, height: 13 }} />
-            </motion.a>
+            </a>
           </div>
         </div>
       </motion.header>
@@ -325,19 +351,11 @@ export default function Home() {
           HERO — DM Serif Display, the only place this face appears
           ============================================================ */}
       <section className="w-full" style={{ paddingTop: 96, paddingBottom: 72 }}>
-        <motion.div
-          className="mx-auto px-6"
-          style={{ maxWidth: 1200 }}
-          variants={staggerContainer}
-          initial="hidden"
-          animate="show"
-        >
-          {/* Announcement pill */}
-          <motion.div variants={fadeUp} className="flex justify-center mb-8">
-            <motion.a
+        <div className="mx-auto px-6" style={{ maxWidth: 1200 }}>
+          {/* Announcement pill — static, no motion, no color */}
+          <div className="flex justify-center mb-8">
+            <a
               href="#transparency"
-              whileHover={{ scale: 1.03 }}
-              whileTap={tapScale}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -356,12 +374,11 @@ export default function Home() {
             >
               {t.hero_eyebrow}
               <ArrowRight style={{ width: 12, height: 12, color: "#6b6b6b" }} />
-            </motion.a>
-          </motion.div>
+            </a>
+          </div>
 
           {/* Hero headline — DM Serif Display, 96px desktop / 40px mobile */}
-          <motion.h1
-            variants={fadeUp}
+          <h1
             className="text-center mx-auto"
             style={{
               fontFamily: "var(--font-dm-serif-display), Georgia, serif",
@@ -375,11 +392,10 @@ export default function Home() {
             }}
           >
             {t.hero_title}
-          </motion.h1>
+          </h1>
 
           {/* Subtitle — Inter, muted */}
-          <motion.p
-            variants={fadeUp}
+          <p
             className="text-center mx-auto"
             style={{
               maxWidth: 720,
@@ -392,11 +408,10 @@ export default function Home() {
             }}
           >
             {t.hero_subtitle}
-          </motion.p>
+          </p>
 
           {/* Hero quote */}
-          <motion.p
-            variants={fadeUp}
+          <p
             className="text-center mx-auto"
             style={{
               maxWidth: 640,
@@ -409,24 +424,16 @@ export default function Home() {
             }}
           >
             {t.hero_quote}
-          </motion.p>
+          </p>
 
           {/* CTA row — outlined neutral primary + ghost secondary */}
-          <motion.div variants={fadeUp} className="flex items-center justify-center gap-4 mt-10 flex-wrap">
-            <motion.a
-              href="#analyze"
-              whileHover={{ scale: 1.04 }}
-              whileTap={tapScale}
-              className="btn-outline-neutral"
-              style={{ padding: "10px 18px", fontSize: 14 }}
-            >
+          <div className="flex items-center justify-center gap-4 mt-10 flex-wrap">
+            <a href="#analyze" className="btn-outline-neutral" style={{ padding: "10px 18px", fontSize: 14 }}>
               {t.hero_cta}
               <ArrowRight style={{ width: 14, height: 14 }} />
-            </motion.a>
-            <motion.a
+            </a>
+            <a
               href="#transparency"
-              whileHover={{ scale: 1.04 }}
-              whileTap={tapScale}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -439,9 +446,9 @@ export default function Home() {
               className="hover:text-white transition-colors"
             >
               {t.nav_transparency}
-            </motion.a>
-          </motion.div>
-        </motion.div>
+            </a>
+          </div>
+        </div>
       </section>
 
       {/* ============================================================
@@ -449,10 +456,8 @@ export default function Home() {
           ============================================================ */}
       <section id="analyze" className="w-full" style={{ paddingBottom: 120 }}>
         <div className="mx-auto px-6" style={{ maxWidth: 1200 }}>
-          {/* Section heading — Inter, tight tracking, no numbered eyebrow.
-              (Analyze / Transparency aren't steps in a sequence, so they
-              don't get a step marker — a plain label instead.) */}
-          <motion.div {...revealOnScroll} className="mb-10">
+          {/* Section heading */}
+          <div className="mb-10">
             <div
               style={{
                 fontFamily: "var(--font-inter), sans-serif",
@@ -476,14 +481,10 @@ export default function Home() {
             >
               Drop the contract. Get the risk report.
             </h2>
-          </motion.div>
+          </div>
 
           {/* Two-column grid: dropzone (left, wider) + selectors (right) */}
-          <motion.div
-            {...revealOnScroll}
-            transition={{ duration: 0.5, ease: "easeOut", delay: 0.1 }}
-            className="grid lg:grid-cols-[1fr_360px] gap-4"
-          >
+          <div className="grid lg:grid-cols-[1fr_360px] gap-4">
             {/* ============================================================
                 Dropzone / paste — feature card surface, static
                 ============================================================ */}
@@ -504,7 +505,7 @@ export default function Home() {
                   <input
                     ref={inputRef}
                     type="file"
-                    accept=".pdf,.zip,.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.csv,.json"
+                    accept=".pdf,.docx,.doc,.zip,.png,.jpg,.jpeg,.webp,.gif,.txt,.md,.csv,.json"
                     className="hidden"
                     onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
                   />
@@ -654,18 +655,114 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* Format hints — icons monochrome, no violet */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-6" style={{ paddingTop: 16, borderTop: "1px solid #242424" }}>
-                {[
-                  { icon: FileText, text: t.dropzone_pdf_hint },
-                  { icon: ImageIcon, text: t.dropzone_image_hint },
-                  { icon: Upload, text: t.dropzone_zip_hint },
-                ].map((hint, i) => (
-                  <div key={i} className="flex items-start gap-2" style={{ fontSize: 12, color: "#6b6b6b", lineHeight: 1.5 }}>
-                    <hint.icon style={{ width: 13, height: 13, color: "#9a9a9a", flexShrink: 0, marginTop: 2 }} strokeWidth={1.5} />
-                    <span style={{ fontFamily: "var(--font-inter), sans-serif" }}>{hint.text}</span>
-                  </div>
-                ))}
+              {/* Additional context box — where the client tells the AI
+                  what to look at first. e.g. "I got this from ABC Bank,
+                  page 5 looks suspicious, focus on the cancellation clause." */}
+              <div
+                className="mt-6"
+                style={{ paddingTop: 16, borderTop: "1px solid #242424" }}
+              >
+                <div
+                  style={{
+                    fontFamily: "var(--font-inter), sans-serif",
+                    fontSize: 11,
+                    color: "#6b6b6b",
+                    marginBottom: 8,
+                    letterSpacing: "0.04em",
+                    textTransform: "uppercase",
+                    fontWeight: 500,
+                  }}
+                >
+                  Additional context (optional)
+                </div>
+                <textarea
+                  value={userNotes}
+                  onChange={(e) => setUserNotes(e.target.value)}
+                  placeholder="e.g. I received this from ABC Bank on 15 July. Page 5 looks suspicious — focus on the cancellation clause. The agent said there's no processing fee but the contract mentions one."
+                  style={{
+                    width: "100%",
+                    minHeight: 80,
+                    padding: 12,
+                    borderRadius: 8,
+                    background: "#000000",
+                    border: "1px solid #242424",
+                    color: "#e8e8e8",
+                    fontFamily: "var(--font-inter), sans-serif",
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                    resize: "vertical",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = "#6b6b6b")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "#242424")}
+                />
+                <div
+                  style={{
+                    fontFamily: "var(--font-inter), sans-serif",
+                    fontSize: 11,
+                    color: "#6b6b6b",
+                    marginTop: 6,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  The AI will read this before analysing the contract and pay extra attention to anything you flag here.
+                </div>
+              </div>
+
+              {/* File-type option chips — click to open the file picker
+                  filtered to that type. Replaces the old 3-column format
+                  hints with a cleaner, actionable row of buttons. */}
+              <div
+                className="mt-6"
+                style={{ paddingTop: 16, borderTop: "1px solid #242424" }}
+              >
+                <div
+                  style={{
+                    fontFamily: "var(--font-inter), sans-serif",
+                    fontSize: 11,
+                    color: "#6b6b6b",
+                    marginBottom: 10,
+                    letterSpacing: "0.04em",
+                    textTransform: "uppercase",
+                    fontWeight: 500,
+                  }}
+                >
+                  Upload by type
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { id: "pdf", label: "PDF" },
+                    { id: "docx", label: "DOCX" },
+                    { id: "image", label: "Image" },
+                    { id: "zip", label: "ZIP" },
+                    { id: "text", label: "Text" },
+                  ].map((opt) => {
+                    const active = selectedFileType === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onChipClick(opt.id)}
+                        style={{
+                          padding: "7px 14px",
+                          borderRadius: 6,
+                          border: `1px solid ${active ? "#6b6b6b" : "#242424"}`,
+                          background: active ? "#141414" : "transparent",
+                          color: active ? "#ffffff" : "#9a9a9a",
+                          fontFamily: "var(--font-jetbrains-mono), monospace",
+                          fontSize: 11,
+                          fontWeight: 500,
+                          letterSpacing: "0.04em",
+                          cursor: "pointer",
+                          transition: "all 0.15s ease",
+                        }}
+                        className="hover:border-[#3a3a3a] hover:text-white transition-colors"
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -692,10 +789,8 @@ export default function Home() {
                   {SECTORS.map((s) => {
                     const active = sector === s.id;
                     return (
-                      <motion.button
+                      <button
                         key={s.id}
-                        whileHover={{ scale: 1.015 }}
-                        whileTap={tapScale}
                         onClick={() => setSector(s.id)}
                         style={{
                           textAlign: "left",
@@ -712,7 +807,7 @@ export default function Home() {
                         className="hover:border-[#3a3a3a] hover:text-white transition-colors"
                       >
                         {t[s.labelKey] as string}
-                      </motion.button>
+                      </button>
                     );
                   })}
                 </div>
@@ -737,10 +832,8 @@ export default function Home() {
                   {DOC_LANGS.map((l) => {
                     const active = docLanguage === l.id;
                     return (
-                      <motion.button
+                      <button
                         key={l.id}
-                        whileHover={{ scale: 1.03 }}
-                        whileTap={tapScale}
                         onClick={() => setDocLanguage(l.id)}
                         style={{
                           flex: 1,
@@ -757,16 +850,14 @@ export default function Home() {
                         className="hover:border-[#3a3a3a] hover:text-white transition-colors"
                       >
                         {t[l.labelKey] as string}
-                      </motion.button>
+                      </button>
                     );
                   })}
                 </div>
               </div>
 
               {/* Analyze button — the single primary action, neutral outline */}
-              <motion.button
-                whileHover={canAnalyze ? { scale: 1.015 } : undefined}
-                whileTap={canAnalyze ? tapScale : undefined}
+              <button
                 onClick={analyze}
                 disabled={!canAnalyze}
                 className={canAnalyze ? "btn-outline-neutral" : ""}
@@ -802,11 +893,9 @@ export default function Home() {
                     <ArrowRight style={{ width: 14, height: 14 }} />
                   </>
                 )}
-              </motion.button>
+              </button>
 
-              {/* Progress lines — the one place a short, purposeful
-                  animation earns its keep: it's reporting real pipeline
-                  state, not decorating an idle screen. */}
+              {/* Progress lines */}
               {isBusy && (
                 <div className="flex flex-col gap-2" style={{ paddingTop: 16, borderTop: "1px solid #242424" }}>
                   <ProgressLine done={stage.kind !== "uploading"} label={t.status_uploading} />
@@ -816,7 +905,7 @@ export default function Home() {
                 </div>
               )}
             </div>
-          </motion.div>
+          </div>
 
           {/* Error */}
           <AnimatePresence>
@@ -841,7 +930,7 @@ export default function Home() {
               </motion.div>
             )}
 
-            {/* Report — the one designed motion sequence in the app */}
+            {/* Report */}
             {stage.kind === "done" && <ReportView result={stage.result} uiLang={uiLang} onBack={reset} t={t} />}
           </AnimatePresence>
         </div>
@@ -852,7 +941,7 @@ export default function Home() {
           ============================================================ */}
       <section id="transparency" className="w-full" style={{ paddingTop: 80, paddingBottom: 120, borderTop: "1px solid #242424" }}>
         <div className="mx-auto px-6" style={{ maxWidth: 1200 }}>
-          <motion.div {...revealOnScroll} className="mb-12">
+          <div className="mb-12">
             <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 13, color: "#6b6b6b", marginBottom: 8, fontWeight: 500 }}>
               Transparency
             </div>
@@ -872,7 +961,7 @@ export default function Home() {
             <p style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 16, lineHeight: 1.6, color: "#9a9a9a", maxWidth: 720 }}>
               {t.transparency_intro}
             </p>
-          </motion.div>
+          </div>
 
           <div className="grid md:grid-cols-2 gap-4">
             <Panel eyebrow="Privacy" title={t.transparency_no_logging_heading}>
@@ -914,11 +1003,7 @@ export default function Home() {
           FOOTER — minimal, two links
           ============================================================ */}
       <footer className="mt-auto" style={{ borderTop: "1px solid #242424", padding: "32px 0" }}>
-        <motion.div
-          {...revealOnScroll}
-          className="mx-auto px-6 flex items-center justify-between"
-          style={{ maxWidth: 1200 }}
-        >
+        <div className="mx-auto px-6 flex items-center justify-between" style={{ maxWidth: 1200 }}>
           <div style={{ fontFamily: "var(--font-inter), sans-serif", fontSize: 13, color: "#6b6b6b" }}>{t.footer_built}</div>
           <div className="flex items-center gap-6">
             <a
@@ -936,13 +1021,10 @@ export default function Home() {
               {t.nav_transparency}
             </a>
           </div>
-        </motion.div>
+        </div>
       </footer>
 
-      {/* Scoped styles for the one reusable button pattern in the system:
-          transparent fill, neutral grey border, no glow on hover — just a
-          one-step lighter border. This is the sole "interactive" treatment
-          on any button anywhere in the app. */}
+      {/* Scoped styles for the one reusable button pattern in the system */}
       <style jsx global>{`
         .btn-outline-neutral {
           display: inline-flex;
@@ -995,11 +1077,7 @@ function ProgressLine({ done, label }: { done: boolean; label: string }) {
 
 function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: React.ReactNode }) {
   return (
-    <motion.div
-      {...revealOnScroll}
-      whileHover={{ y: -3, borderColor: "#3a3a3a" }}
-      style={{ background: "#0a0a0a", border: "1px solid #242424", borderRadius: 16, padding: 32 }}
-    >
+    <div style={{ background: "#0a0a0a", border: "1px solid #242424", borderRadius: 16, padding: 32 }}>
       <div
         style={{
           fontFamily: "var(--font-inter), sans-serif",
@@ -1017,17 +1095,12 @@ function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; c
         {title}
       </h3>
       {children}
-    </motion.div>
+    </div>
   );
 }
 
 // ===========================================================================
-// Report view — a redline, not a dashboard.
-// ---------------------------------------------------------------------------
-// This is the one surface in the app that gets a designed motion sequence:
-// the risk score counts up and clauses reveal in document order, because
-// that's the actual moment the product delivers value — turning a contract
-// into a scored, citable finding. Everything else in the app stays still.
+// Report view
 // ===========================================================================
 
 function ReportView({
@@ -1078,10 +1151,7 @@ function ReportView({
         </button>
       </div>
 
-      {/* Risk score + meta — score is the single mono numeral in the
-          hierarchy: it is data that must be read precisely, so it earns
-          the code-identity typeface, at the size that makes it the clear
-          anchor of this view. */}
+      {/* Risk score + meta */}
       <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-8 mb-8" style={{ paddingBottom: 32, borderBottom: "1px solid #242424" }}>
         <div>
           <div className="flex items-baseline gap-3 mb-3">
@@ -1117,11 +1187,7 @@ function ReportView({
         </div>
       )}
 
-      {/* Clause list — styled as a redline: each finding is a numbered
-          clause with a left severity rule, the way a lawyer's markup
-          would flag a document. The numbering here is real sequence
-          information (clause order in the contract), unlike a marketing
-          section eyebrow, so it earns its place. */}
+      {/* Clause list */}
       <div
         style={{
           fontFamily: "var(--font-inter), sans-serif",
@@ -1267,7 +1333,7 @@ function ReportView({
                   {explanation}
                 </p>
 
-                {/* Legal basis — mono, neutral (not violet) */}
+                {/* Legal basis */}
                 <div
                   style={{
                     fontFamily: "var(--font-inter), sans-serif",
