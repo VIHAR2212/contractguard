@@ -4,8 +4,8 @@
 // ContractGuard — main analysis endpoint.
 //
 // Accepts two request shapes:
-//   (1) multipart/form-data — fields: file (File), sector, docLanguage
-//   (2) application/json     — fields: pastedText, sector, docLanguage
+//   (1) multipart/form-data — fields: file (File), sector, docLanguage, userNotes (optional)
+//   (2) application/json     — fields: pastedText, sector, docLanguage, userNotes (optional)
 //
 // Returns a strict AnalyzeResponse JSON object that the frontend renders
 // directly into the risk report.
@@ -55,6 +55,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
   let sector: Sector;
   let docLanguage: DocLanguage;
   let parsed;
+  let userNotes = "";
 
   try {
     // ------------------------------------------------------------------
@@ -65,6 +66,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
       const file = form.get("file");
       const sectorRaw = form.get("sector");
       const langRaw = form.get("docLanguage");
+      const notesRaw = form.get("userNotes");
 
       if (!isSector(typeof sectorRaw === "string" ? sectorRaw : null)) {
         return errorResponse("Missing or invalid 'sector'. Must be one of: construction, finance, gig-job.");
@@ -74,6 +76,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
         return errorResponse("Missing or invalid 'docLanguage'. Must be one of: en, hi, hinglish.");
       }
       docLanguage = langRaw as DocLanguage;
+      userNotes = typeof notesRaw === "string" ? notesRaw.trim() : "";
 
       if (!(file instanceof File)) {
         return errorResponse("No 'file' field found in multipart upload.");
@@ -91,7 +94,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
       console.log(`[analyze] parsed kind=${parsed.kind} textLen=${parsed.text?.length ?? 0} in ${Date.now() - startTime}ms`);
     } else {
       const body = await req.json().catch(() => null) as
-        | { pastedText?: string; sector?: string; docLanguage?: string }
+        | { pastedText?: string; sector?: string; docLanguage?: string; userNotes?: string }
         | null;
       if (!body) return errorResponse("Invalid JSON body.");
       if (!isSector(body.sector ?? null)) {
@@ -102,6 +105,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
         return errorResponse("Missing or invalid 'docLanguage'. Must be one of: en, hi, hinglish.");
       }
       docLanguage = body.docLanguage as DocLanguage;
+      userNotes = (body.userNotes ?? "").trim();
       const pastedText = (body.pastedText ?? "").trim();
       if (pastedText.length < 30) {
         return errorResponse("Pasted text is too short — at least 30 characters required.");
@@ -133,7 +137,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
     }
 
     // ------------------------------------------------------------------
-    // Handle PDFs where text extraction failed (scanned PDF or font issue)
+    // Handle PDFs/DOCX where text extraction failed
     // ------------------------------------------------------------------
     if (parsed.kind === "pdf_no_text") {
       return NextResponse.json<AnalyzeResponse>(
@@ -143,7 +147,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
           clauses: [],
           sector,
           docLanguage,
-          message: "This PDF has no extractable text layer (it's either scanned or uses custom font encoding that the PDF parser cannot decode). Please either: (1) paste the contract text manually using the paste mode, or (2) take a screenshot of the PDF and upload it as an image — the vision model can OCR it.",
+          message: "This file has no extractable text layer (it's either scanned or uses custom font encoding the parser cannot decode). Please either: (1) paste the contract text manually using the paste mode, or (2) take a screenshot and upload it as an image — the vision model can OCR it.",
           rulesConsidered: 0,
           pipelineMs: Date.now() - startTime,
         },
@@ -153,9 +157,8 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
 
     // ------------------------------------------------------------------
     // Run the pipeline — with a hard 9-second budget on Vercel Hobby
-    // (leaves 1s buffer before the 10s kill).
     // ------------------------------------------------------------------
-    const pipelinePromise = runSectorPipeline({ parsed, sector, docLanguage });
+    const pipelinePromise = runSectorPipeline({ parsed, sector, docLanguage, userNotes });
 
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error("PIPELINE_TIMEOUT_9S")), 9000)
