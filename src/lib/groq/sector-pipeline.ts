@@ -10,14 +10,14 @@
 //    set ENABLE_RULEBOOKS=1 to re-enable)
 // - Uses three Groq accounts (one per sector) for load balancing
 // - Falls back to a deterministic keyword matcher when no API key is set
-//   or the API call fails, so the demo always returns a result
+//   or the API call fails — keywords must be co-located in the same
+//   paragraph/chunk to prevent false positives
 // - Hard 6-second timeout on the Groq call so the keyword fallback can
 //   still run before Vercel Hobby kills the function at 10s
 // - Accepts optional userNotes from the frontend and injects them into
 //   the Groq prompt so the AI pays extra attention to user-flagged context
-// - CHUNKED ANALYSIS: for documents >12K chars (e.g. 27-page credit card
-//   agreements), splits into chunks and processes them in parallel so
-//   Groq can finish within Vercel's 10s limit
+// - CHUNKED ANALYSIS: for documents >12K chars, splits into chunks and
+//   processes them in parallel
 // ===========================================================================
 
 import Groq from "groq-sdk";
@@ -46,7 +46,6 @@ export interface SectorPipelineInput {
   parsed: ParsedDocument;
   sector: Sector;
   docLanguage: DocLanguage;
-  /** Optional user-provided context — e.g. "I got this from ABC Bank, page 5 looks suspicious". Injected into the Groq prompt. */
   userNotes?: string;
 }
 
@@ -406,9 +405,7 @@ async function callGroqVision(
 
 // ---------------------------------------------------------------------------
 // Chunked analysis — for large documents (>12K chars), split into chunks
-// and call Groq on each chunk in parallel, then merge. This is what lets
-// ContractGuard handle 27-page credit card agreements within Vercel's
-// 10-second free-tier limit.
+// and call Groq on each chunk in parallel, then merge.
 // ---------------------------------------------------------------------------
 
 async function callGroqChunked(
@@ -423,14 +420,12 @@ async function callGroqChunked(
   const fullText = parsed.text ?? "";
   const chunks = chunkText(fullText);
 
-  // If only one chunk, just call the normal text path
   if (chunks.length <= 1) {
     return (await callGroqText(parsed, rules, sector, docLanguage, config, rulebooks, userNotes)) ?? { matches: [] };
   }
 
   console.log(`[pipeline] chunking: ${fullText.length} chars → ${chunks.length} chunks (parallel)`);
 
-  // Process all chunks in parallel — each chunk is small enough for ~3s Groq call
   const chunkPromises = chunks.map(async (chunk) => {
     const chunkParsed: ParsedDocument = {
       ...parsed,
@@ -448,7 +443,6 @@ async function callGroqChunked(
 
   const chunkResults = await Promise.all(chunkPromises);
 
-  // Merge — dedupe by ruleId (keep first occurrence with longest snippet)
   const seenRules = new Map<string, RawModelMatch>();
   for (const matches of chunkResults) {
     for (const m of matches) {
@@ -467,6 +461,12 @@ async function callGroqChunked(
 
 // ---------------------------------------------------------------------------
 // Deterministic fallback — keyword matcher
+// ---------------------------------------------------------------------------
+// Keywords must be co-located in the SAME paragraph/chunk (not scattered
+// across the document) to prevent false positives. For example, if
+// "modify" appears in section 17 and "without notice" appears in section 9,
+// that should NOT fire the RBI-MODIFY-005 rule — they must appear together
+// in the same context.
 // ---------------------------------------------------------------------------
 
 const KEYWORDS_BY_RULE: Record<string, string[]> = {
@@ -513,40 +513,106 @@ function fallbackMatch(
   rules: Rule[],
   docLanguage: DocLanguage
 ): { matches: RawModelMatch[]; roadmapNote?: string } {
-  const text = (parsed.text ?? "").toLowerCase();
-  if (!text) return { matches: [] };
+  const fullText = parsed.text ?? "";
+  if (!fullText) return { matches: [] };
   const matches: RawModelMatch[] = [];
   const seenSnippets = new Set<string>();
+
+  // Split into paragraphs — keywords must appear in the SAME paragraph,
+  // not scattered across the document. This prevents false positives where
+  // "modify" appears in section 17 and "without notice" appears in section 9.
+  const paragraphs = fullText
+    .split(/\n\s*\n/)
+    .map(p => p.replace(/\s+/g, " ").trim())
+    .filter(p => p.length > 20);
+
+  // If the document has no paragraph breaks (one big block), split by
+  // sentence-like boundaries every ~500 chars
+  if (paragraphs.length <= 1) {
+    const chunks: string[] = [];
+    const sentences = fullText.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/);
+    let current = "";
+    for (const s of sentences) {
+      if ((current + " " + s).length > 500) {
+        if (current) chunks.push(current.trim());
+        current = s;
+      } else {
+        current = (current + " " + s).trim();
+      }
+    }
+    if (current) chunks.push(current.trim());
+    paragraphs.length = 0;
+    paragraphs.push(...chunks.filter(p => p.length > 20));
+  }
 
   for (const rule of rules) {
     const keywords = KEYWORDS_BY_RULE[rule.id] ?? [];
     if (!keywords.length) continue;
-    const hits = keywords.filter((k) => text.includes(k.toLowerCase()));
-    if (hits.length < 2) continue;
 
-    const firstHit = hits
-      .map((k) => text.indexOf(k.toLowerCase()))
-      .filter((i) => i >= 0)
-      .sort((a, b) => a - b)[0];
-    if (firstHit < 0) continue;
+    // Search each paragraph for co-located keywords
+    let bestParagraph: string | null = null;
+    let bestHitCount = 0;
+    let bestHits: string[] = [];
 
-    const start = Math.max(0, firstHit - 120);
-    const end = Math.min(text.length, firstHit + 280);
-    let snippet = (parsed.text ?? "").slice(start, end).replace(/\s+/g, " ").trim();
+    for (const para of paragraphs) {
+      const paraLower = para.toLowerCase();
+      const hitsInPara = keywords.filter(k => paraLower.includes(k.toLowerCase()));
+      if (hitsInPara.length >= 2 && hitsInPara.length > bestHitCount) {
+        bestHitCount = hitsInPara.length;
+        bestHits = hitsInPara;
+        bestParagraph = para;
+      }
+    }
+
+    if (!bestParagraph || bestHitCount < 2) continue;
+
+    // Extract a snippet centered on the first keyword hit
+    const firstKeyword = bestHits[0].toLowerCase();
+    const snippetStart = bestParagraph.toLowerCase().indexOf(firstKeyword);
+    const snippetCenter = snippetStart >= 0 ? snippetStart : Math.floor(bestParagraph.length / 2);
+
+    const start = Math.max(0, snippetCenter - 100);
+    const end = Math.min(bestParagraph.length, snippetCenter + 300);
+    let snippet = bestParagraph.slice(start, end).trim();
     if (snippet.length > 400) snippet = snippet.slice(0, 400);
+    if (snippet.length === 400) {
+      const lastSpace = snippet.lastIndexOf(" ");
+      if (lastSpace > 350) snippet = snippet.slice(0, lastSpace) + "…";
+    }
 
     const key = `${rule.id}:${snippet.slice(0, 80)}`;
     if (seenSnippets.has(key)) continue;
     seenSnippets.add(key);
 
     const confidence =
-      hits.length >= 4 ? "high" : hits.length >= 3 ? "medium" : "low";
+      bestHitCount >= 4 ? "high" : bestHitCount >= 3 ? "medium" : "low";
+    const involvesCharge = rule.involvesChargeValidation ?? false;
+    const chargeValidity: ChargeValidity = involvesCharge
+      ? "invalid"
+      : "not_applicable";
+    const permittedCharge = rule.permittedCharge ?? (involvesCharge ? "As per statute" : undefined);
 
     matches.push({
       ruleId: rule.id,
       snippet,
       confidence,
-      notes: `Fallback match on keywords: ${hits.slice(0, 4).join(", ")}.`,
+      notes: `Fallback match on keywords in same paragraph: ${bestHits.slice(0, 4).join(", ")}.`,
+      chargeValidity,
+      chargeExtracted: involvesCharge
+        ? "(extracted from snippet — run with Groq for precise extraction)"
+        : undefined,
+      permittedCharge,
+      chargeAnalysisEn: rule.plainEnglishTemplate.replace("{clause}", snippet),
+      chargeAnalysisHi: rule.plainHindiTemplate.replace("{clause}", snippet),
+      summarizedReasonEn: `${rule.legal_basis} is violated by this clause. ${involvesCharge ? `The permitted charge is: ${permittedCharge}.` : ""}`,
+      summarizedReasonHi: `${rule.legal_basis} इस धारा द्वारा उल्लंघन किया गया है।`,
+      counterArgumentEn: `Under ${rule.legal_basis}, this clause is not enforceable. I request you to revise the agreement to comply with the statutory requirement. Failing which, I reserve the right to approach the appropriate authority.`,
+      counterArgumentHi: `${rule.legal_basis} के तहत, यह धारा लागू नहीं होती। मैं आपसे अनुरोध करता/करती हूँ कि आप समझौते को वैधानिक आवश्यकता के अनुसार संशोधित करें।`,
+      precedentStrength:
+        rule.legal_basis.includes("vs") || rule.legal_basis.includes("v.")
+          ? "binding"
+          : "statutory",
+      citedSections: [rule.legal_basis],
     });
   }
 
@@ -582,7 +648,6 @@ export async function runSectorPipeline(
 ): Promise<SectorPipelineResult> {
   const start = Date.now();
 
-  // 1. Load rules (local + Supabase merge)
   const rulesResult = await loadRulesForSector(input.sector);
   const rules = rulesResult.rules;
   if (!rules.length) {
@@ -597,23 +662,17 @@ export async function runSectorPipeline(
     };
   }
 
-  // 2. Load full-text rulebooks from Supabase — DISABLED by default to
-  //    keep the Groq prompt small enough for Vercel Hobby's 10s limit.
-  //    Set ENABLE_RULEBOOKS=1 in Vercel env vars to re-enable.
   const enableRulebooks = process.env.ENABLE_RULEBOOKS === "1";
   const rulebooks: RulebookDoc[] = enableRulebooks
     ? (await loadRulebooksForSector(input.sector)).docs
     : [];
 
-  // 3. Pick the per-sector Groq config
   const config = getSectorConfig(input.sector);
 
   let raw: { matches: RawModelMatch[]; roadmapNote?: string } | null = null;
   let usedFallback = false;
 
   if (config.apiKey) {
-    // Race Groq against a 6-second timeout so the keyword fallback can
-    // still run before Vercel Hobby kills the function at 10s.
     const groqPromise = (async () => {
       try {
         if (input.parsed.kind === "image") {
@@ -627,8 +686,6 @@ export async function runSectorPipeline(
             input.userNotes
           );
         }
-        // For text: use chunked analysis — handles both small files (1 chunk)
-        // and large files (27-page credit card agreement → 5 chunks in parallel)
         return await callGroqChunked(
           input.parsed,
           rules,
@@ -661,7 +718,6 @@ export async function runSectorPipeline(
     raw = await Promise.race([groqPromise, timeoutPromise]);
   }
 
-  // Fallback — keyword matcher
   if (
     !raw ||
     (raw.matches.length === 0 &&
@@ -675,7 +731,6 @@ export async function runSectorPipeline(
     }
   }
 
-  // Resolve raw matches to full MatchedClause objects.
   const rulesById = new Map<string, Rule>(rules.map((r) => [r.id, r]));
   const clauses: MatchedClause[] = [];
   for (const m of raw.matches) {
