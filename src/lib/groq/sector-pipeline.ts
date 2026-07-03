@@ -6,9 +6,13 @@
 //
 // - Merges local rules + Supabase rules (Supabase overrides on ID collision)
 // - Loads full-text rulebooks from Supabase and injects them as context
+//   (DISABLED by default to keep prompts small for Vercel Hobby 10s limit;
+//    set ENABLE_RULEBOOKS=1 to re-enable)
 // - Uses three Groq accounts (one per sector) for load balancing
 // - Falls back to a deterministic keyword matcher when no API key is set
 //   or the API call fails, so the demo always returns a result
+// - Hard 6-second timeout on the Groq call so the keyword fallback can
+//   still run before Vercel Hobby kills the function at 10s
 // ===========================================================================
 
 import Groq from "groq-sdk";
@@ -454,7 +458,6 @@ function fallbackMatch(
 
     const confidence =
       hits.length >= 4 ? "high" : hits.length >= 3 ? "medium" : "low";
-    const involvesCharge = rule.involvesChargeValidation ?? false;
 
     matches.push({
       ruleId: rule.id,
@@ -511,9 +514,13 @@ export async function runSectorPipeline(
     };
   }
 
-  // 2. Load full-text rulebooks from Supabase
-  const rulebooksResult = await loadRulebooksForSector(input.sector);
-  const rulebooks = rulebooksResult.docs;
+  // 2. Load full-text rulebooks from Supabase — DISABLED by default to
+  //    keep the Groq prompt small enough for Vercel Hobby's 10s limit.
+  //    Set ENABLE_RULEBOOKS=1 in Vercel env vars to re-enable.
+  const enableRulebooks = process.env.ENABLE_RULEBOOKS === "1";
+  const rulebooks: RulebookDoc[] = enableRulebooks
+    ? (await loadRulebooksForSector(input.sector)).docs
+    : [];
 
   // 3. Pick the per-sector Groq config
   const config = getSectorConfig(input.sector);
@@ -522,9 +529,21 @@ export async function runSectorPipeline(
   let usedFallback = false;
 
   if (config.apiKey) {
-    try {
-      if (input.parsed.kind === "image") {
-        raw = await callGroqVision(
+    // Race Groq against a 6-second timeout so the keyword fallback can
+    // still run before Vercel Hobby kills the function at 10s.
+    const groqPromise = (async () => {
+      try {
+        if (input.parsed.kind === "image") {
+          return await callGroqVision(
+            input.parsed,
+            rules,
+            input.sector,
+            input.docLanguage,
+            config,
+            rulebooks
+          );
+        }
+        return await callGroqText(
           input.parsed,
           rules,
           input.sector,
@@ -532,22 +551,27 @@ export async function runSectorPipeline(
           config,
           rulebooks
         );
-      } else {
-        raw = await callGroqText(
-          input.parsed,
-          rules,
-          input.sector,
-          input.docLanguage,
-          config,
-          rulebooks
-        );
+      } catch (err) {
+        return {
+          matches: [] as RawModelMatch[],
+          roadmapNote: `Groq API error (${config.keySource} key): ${(err as Error).message}. Falling back to keyword matcher.`,
+        };
       }
-    } catch (err) {
-      raw = {
-        matches: [],
-        roadmapNote: `Groq API error (${config.keySource} key): ${(err as Error).message}. Falling back to keyword matcher.`,
-      };
-    }
+    })();
+
+    const timeoutPromise = new Promise<{ matches: RawModelMatch[]; roadmapNote?: string }>(
+      (resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              matches: [],
+              roadmapNote: `Groq did not respond within 6s — using keyword fallback.`,
+            }),
+          6000
+        )
+    );
+
+    raw = await Promise.race([groqPromise, timeoutPromise]);
   }
 
   // Fallback — keyword matcher
@@ -565,7 +589,6 @@ export async function runSectorPipeline(
   }
 
   // Resolve raw matches to full MatchedClause objects.
-  // Deep-research fields are optional — only included if the model returned them.
   const rulesById = new Map<string, Rule>(rules.map((r) => [r.id, r]));
   const clauses: MatchedClause[] = [];
   for (const m of raw.matches) {
@@ -583,7 +606,6 @@ export async function runSectorPipeline(
       explanationHi: rendered.hi,
       legalBasis: rule.legal_basis,
       roadmapNote: m.notes || raw.roadmapNote,
-      // Deep-research fields — only included if the model returned them
       ...(m.chargeValidity !== undefined && { chargeValidity: m.chargeValidity }),
       ...(m.chargeExtracted !== undefined && { chargeExtracted: m.chargeExtracted }),
       ...(m.permittedCharge !== undefined && {
