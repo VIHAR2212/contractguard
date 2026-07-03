@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono, DM_Serif_Display } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import FlyingPapersBackground from "@/components/effects/FlyingPapersBackground";
+import LivelyCursor from "@/components/effects/LivelyCursor";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -62,7 +64,9 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${jetbrainsMono.variable} ${dmSerifDisplay.variable} antialiased bg-background text-foreground`}
       >
-        {children}
+        <FlyingPapersBackground />
+        <div style={{ position: "relative", zIndex: 1 }}>{children}</div>
+        <LivelyCursor />
         <Toaster />
       </body>
     </html>
