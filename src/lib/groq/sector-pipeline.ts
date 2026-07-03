@@ -15,6 +15,9 @@
 //   still run before Vercel Hobby kills the function at 10s
 // - Accepts optional userNotes from the frontend and injects them into
 //   the Groq prompt so the AI pays extra attention to user-flagged context
+// - CHUNKED ANALYSIS: for documents >12K chars (e.g. 27-page credit card
+//   agreements), splits into chunks and processes them in parallel so
+//   Groq can finish within Vercel's 10s limit
 // ===========================================================================
 
 import Groq from "groq-sdk";
@@ -33,6 +36,7 @@ import {
   type RulebookDoc,
 } from "@/lib/supabase/rulebooks";
 import type { ParsedDocument } from "@/lib/parsers";
+import { chunkText } from "@/lib/parsers";
 
 // ---------------------------------------------------------------------------
 // Pipeline input / output
@@ -239,7 +243,8 @@ RULES OF THE GAME:
 9. Snippets must be at most 400 characters, verbatim from the contract.
 10. Return at most one match per rule id.
 11. If a clause does not involve a charge/cost, set chargeValidity to "not_applicable" and leave chargeExtracted/permittedCharge empty — but still fill in summarizedReasonEn, counterArgumentEn, citedSections, and precedentStrength.
-12. If the user provides additional context (USER-PROVIDED CONTEXT block), read it BEFORE matching and pay extra attention to anything the user flags. Do not invent new rules based on the user's notes — only use them to prioritise which clauses to examine most closely.`;
+12. If the user provides additional context (USER-PROVIDED CONTEXT block), read it BEFORE matching and pay extra attention to anything the user flags. Do not invent new rules based on the user's notes — only use them to prioritise which clauses to examine most closely.
+13. If the document text is labelled "(part N/M)" it means the contract was split into chunks for analysis. Match clauses within the chunk you can see — other chunks are being analysed in parallel.`;
 }
 
 function buildTextUserPrompt(
@@ -397,6 +402,67 @@ async function callGroqVision(
   } catch {
     return { matches: [], roadmapNote: "Vision model returned invalid JSON." };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Chunked analysis — for large documents (>12K chars), split into chunks
+// and call Groq on each chunk in parallel, then merge. This is what lets
+// ContractGuard handle 27-page credit card agreements within Vercel's
+// 10-second free-tier limit.
+// ---------------------------------------------------------------------------
+
+async function callGroqChunked(
+  parsed: ParsedDocument,
+  rules: Rule[],
+  sector: Sector,
+  docLanguage: DocLanguage,
+  config: SectorConfig,
+  rulebooks: RulebookDoc[],
+  userNotes?: string
+): Promise<{ matches: RawModelMatch[]; roadmapNote?: string }> {
+  const fullText = parsed.text ?? "";
+  const chunks = chunkText(fullText);
+
+  // If only one chunk, just call the normal text path
+  if (chunks.length <= 1) {
+    return (await callGroqText(parsed, rules, sector, docLanguage, config, rulebooks, userNotes)) ?? { matches: [] };
+  }
+
+  console.log(`[pipeline] chunking: ${fullText.length} chars → ${chunks.length} chunks (parallel)`);
+
+  // Process all chunks in parallel — each chunk is small enough for ~3s Groq call
+  const chunkPromises = chunks.map(async (chunk) => {
+    const chunkParsed: ParsedDocument = {
+      ...parsed,
+      text: chunk.text,
+      filename: `${parsed.filename} (part ${chunk.index + 1}/${chunk.total})`,
+    };
+    try {
+      const result = await callGroqText(chunkParsed, rules, sector, docLanguage, config, rulebooks, userNotes);
+      return result?.matches ?? [];
+    } catch (err) {
+      console.error(`[pipeline] chunk ${chunk.index} failed:`, (err as Error).message);
+      return [];
+    }
+  });
+
+  const chunkResults = await Promise.all(chunkPromises);
+
+  // Merge — dedupe by ruleId (keep first occurrence with longest snippet)
+  const seenRules = new Map<string, RawModelMatch>();
+  for (const matches of chunkResults) {
+    for (const m of matches) {
+      const existing = seenRules.get(m.ruleId);
+      if (!existing || (m.snippet?.length ?? 0) > (existing.snippet?.length ?? 0)) {
+        seenRules.set(m.ruleId, m);
+      }
+    }
+  }
+
+  return {
+    matches: Array.from(seenRules.values()),
+    roadmapNote: `Document was split into ${chunks.length} chunks and analysed in parallel.`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -561,7 +627,9 @@ export async function runSectorPipeline(
             input.userNotes
           );
         }
-        return await callGroqText(
+        // For text: use chunked analysis — handles both small files (1 chunk)
+        // and large files (27-page credit card agreement → 5 chunks in parallel)
+        return await callGroqChunked(
           input.parsed,
           rules,
           input.sector,
