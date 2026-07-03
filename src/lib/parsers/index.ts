@@ -3,22 +3,18 @@
 // ---------------------------------------------------------------------------
 // File parsing utilities for ContractGuard.
 //
-// Supported input types:
-//   • PDF   (text-layer extracted via pdf-parse)
-//   • ZIP   (extracted via adm-zip; every contained PDF / .txt / .md is
-//            parsed recursively; image files are surfaced for vision pass)
-//   • Image (PNG / JPG / JPEG / WEBP / GIF) — passed through to the Groq
-//            vision endpoint unchanged
-//   • Plain text (.txt, .md, .csv, .json) — passed through verbatim
+// PDF parsing uses `unpdf` (serverless-friendly pdfjs-dist wrapper) instead
+// of pdf-parse v2. unpdf handles custom font subsetting better and is built
+// for Vercel's serverless environment.
 //
-// Every parser returns a `ParsedDocument`. Image payloads are returned as
-// `kind: "image"` with base64 data + media type so the Groq pipeline can
-// hand them straight to a vision-capable model.
+// If text extraction returns empty (scanned PDF or font-encoding issue),
+// the parser returns kind="pdf_no_text" so the API can return a clear
+// message to the user instead of pretending the analysis succeeded.
 // ===========================================================================
 
 import type { DocLanguage } from "@/lib/types";
 
-export type ParsedKind = "text" | "image";
+export type ParsedKind = "text" | "image" | "pdf_no_text";
 
 export interface ParsedDocument {
   kind: ParsedKind;
@@ -60,13 +56,11 @@ function extOf(name: string): string {
 }
 
 function looksLikeHindi(text: string): boolean {
-  // Devanagari block: U+0900 – U+097F
   const devanagari = (text.match(/[\u0900-\u097F]/g) || []).length;
   return devanagari > text.length * 0.05;
 }
 
 function looksLikeHinglish(text: string): boolean {
-  // Roman script with common Hinglish markers; very rough heuristic.
   if (looksLikeHindi(text)) return false;
   const sample = text.toLowerCase();
   const markers = [
@@ -90,31 +84,61 @@ export function detectLanguage(text: string): DocLanguage {
 }
 
 // ---------------------------------------------------------------------------
-// PDF parsing
+// PDF parsing — uses unpdf (serverless-friendly)
 // ---------------------------------------------------------------------------
 
 async function parsePdf(bytes: Uint8Array, filename: string): Promise<ParsedDocument> {
-  // pdf-parse v2 API: import { PDFParse } from "pdf-parse"; new PDFParse({ data }).getText()
-  // Imported lazily so the bundle stays lean for non-PDF uploads and the
-  // Next.js runtime doesn't try to evaluate Node-only code on the edge.
-  const { PDFParse } = await import("pdf-parse");
-  const pdf = new PDFParse({ data: bytes });
-  let text = "";
-  try {
-    const result = await pdf.getText();
-    text = (result?.text ?? "").trim();
-  } finally {
-    await pdf.destroy().catch(() => {});
+  // Guard against empty / 0-byte uploads — pdfjs-dist will crash the
+  // Vercel worker process on an empty buffer.
+  if (!bytes || bytes.length === 0) {
+    return {
+      kind: "pdf_no_text",
+      text: "",
+      filename,
+      detectedLanguage: "en",
+      warnings: ["The uploaded file is 0 bytes. Please re-select the file and try again."],
+    };
   }
-  return {
-    kind: "text",
-    text,
-    filename,
-    detectedLanguage: detectLanguage(text),
-    warnings: text.length === 0
-      ? ["PDF had no extractable text layer — likely a scanned PDF. Try uploading as an image so the vision model can OCR it."]
-      : [],
-  };
+
+  try {
+    const { extractText, getDocumentProxy } = await import("unpdf");
+
+    const pdf = await getDocumentProxy(new Uint8Array(bytes));
+    const { text } = await extractText(pdf, { mergePages: true });
+    const cleaned = (text ?? "").trim();
+
+    if (cleaned.length < 10) {
+      // Text extraction failed — likely a scanned PDF or font-encoding issue.
+      return {
+        kind: "pdf_no_text",
+        text: "",
+        filename,
+        detectedLanguage: "en",
+        warnings: [
+          "PDF text extraction returned no readable text. This usually means the PDF is scanned (image-based) or uses custom font subsetting that pdfjs-dist cannot decode.",
+          "Falling back to vision-model OCR. If this fails, try pasting the contract text manually.",
+        ],
+      };
+    }
+
+    return {
+      kind: "text",
+      text: cleaned,
+      filename,
+      detectedLanguage: detectLanguage(cleaned),
+      warnings: [],
+    };
+  } catch (err) {
+    // Catch ANY error from unpdf — invalid PDF, encrypted PDF, corrupt
+    // header, worker crash, etc. Don't let it kill the Vercel function.
+    return {
+      kind: "pdf_no_text",
+      text: "",
+      filename,
+      detectedLanguage: "en",
+      warnings: [`Could not parse PDF: ${(err as Error).message}. Try pasting the contract text manually.`],
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +174,7 @@ function parseImage(bytes: Uint8Array, filename: string): ParsedDocument {
 }
 
 // ---------------------------------------------------------------------------
-// ZIP parsing — open and recursively read every PDF / txt / image inside
+// ZIP parsing
 // ---------------------------------------------------------------------------
 
 async function parseZip(bytes: Uint8Array, filename: string): Promise<ParsedDocument> {
@@ -190,17 +214,12 @@ async function parseZip(bytes: Uint8Array, filename: string): Promise<ParsedDocu
   }
 
   if (images.length === 1 && textParts.length === 0) {
-    // Pure single-image zip — let the vision path take it
-    return {
-      ...images[0],
-      containedFiles,
-      warnings,
-    };
+    return { ...images[0], containedFiles, warnings };
   }
 
   if (images.length > 0) {
     warnings.push(
-      `ZIP contained ${images.length} image(s) which were skipped in the text path. For best results upload images separately so the vision model can OCR them.`
+      `ZIP contained ${images.length} image(s) which were skipped in the text path.`
     );
   }
 
@@ -226,14 +245,18 @@ export async function parseFile(
 ): Promise<ParsedDocument> {
   const name = filename.toLowerCase();
   try {
-    if (PDF_EXT.test(name) || mime === "application/pdf") return await parsePdf(bytes, filename);
+    if (PDF_EXT.test(name) || mime === "application/pdf") {
+      return await parsePdf(bytes, filename);
+    }
     if (name.endsWith(".zip") || mime === "application/zip" || mime === "application/x-zip-compressed") {
       return await parseZip(bytes, filename);
     }
-    if (IMAGE_EXT.test(name) || (mime || "").startsWith("image/")) return parseImage(bytes, filename);
-    if (TXT_EXT.test(name) || (mime || "").startsWith("text/")) return parsePlain(bytes, filename);
-
-    // Fallback: try as plain text
+    if (IMAGE_EXT.test(name) || (mime || "").startsWith("image/")) {
+      return parseImage(bytes, filename);
+    }
+    if (TXT_EXT.test(name) || (mime || "").startsWith("text/")) {
+      return parsePlain(bytes, filename);
+    }
     return parsePlain(bytes, filename);
   } catch (err) {
     return {
