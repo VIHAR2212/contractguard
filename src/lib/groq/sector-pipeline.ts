@@ -13,6 +13,8 @@
 //   or the API call fails, so the demo always returns a result
 // - Hard 6-second timeout on the Groq call so the keyword fallback can
 //   still run before Vercel Hobby kills the function at 10s
+// - Accepts optional userNotes from the frontend and injects them into
+//   the Groq prompt so the AI pays extra attention to user-flagged context
 // ===========================================================================
 
 import Groq from "groq-sdk";
@@ -40,6 +42,8 @@ export interface SectorPipelineInput {
   parsed: ParsedDocument;
   sector: Sector;
   docLanguage: DocLanguage;
+  /** Optional user-provided context — e.g. "I got this from ABC Bank, page 5 looks suspicious". Injected into the Groq prompt. */
+  userNotes?: string;
 }
 
 export interface SectorPipelineResult {
@@ -233,12 +237,15 @@ RULES OF THE GAME:
 7. READ THE FULL-TEXT RULEBOOKS. Quote the actual statutory language.
 8. If the contract is not in English/Hindi/Hinglish, translate internally and add a roadmapNote.
 9. Snippets must be at most 400 characters, verbatim from the contract.
-10. Return at most one match per rule id.`;
+10. Return at most one match per rule id.
+11. If a clause does not involve a charge/cost, set chargeValidity to "not_applicable" and leave chargeExtracted/permittedCharge empty — but still fill in summarizedReasonEn, counterArgumentEn, citedSections, and precedentStrength.
+12. If the user provides additional context (USER-PROVIDED CONTEXT block), read it BEFORE matching and pay extra attention to anything the user flags. Do not invent new rules based on the user's notes — only use them to prioritise which clauses to examine most closely.`;
 }
 
 function buildTextUserPrompt(
   parsed: ParsedDocument,
-  docLanguage: DocLanguage
+  docLanguage: DocLanguage,
+  userNotes?: string
 ): string {
   const langHint =
     docLanguage === "en"
@@ -249,8 +256,12 @@ function buildTextUserPrompt(
       ? "The document is in Hinglish (Roman-script Hindi)."
       : "The document language is not English/Hindi/Hinglish. Translate internally to English before matching and add a roadmapNote.";
 
+  const notesBlock = userNotes && userNotes.trim().length > 0
+    ? `\n\n== USER-PROVIDED CONTEXT (read this BEFORE analysing — pay extra attention to anything the user flags here) ==\n${userNotes.trim()}\n== END USER CONTEXT ==`
+    : "";
+
   return `DOCUMENT LANGUAGE: ${langHint}
-DOCUMENT FILENAME: ${parsed.filename}
+DOCUMENT FILENAME: ${parsed.filename}${notesBlock}
 
 CONTRACT TEXT:
 """
@@ -279,13 +290,14 @@ async function callGroqText(
   sector: Sector,
   docLanguage: DocLanguage,
   config: SectorConfig,
-  rulebooks: RulebookDoc[]
+  rulebooks: RulebookDoc[],
+  userNotes?: string
 ): Promise<{ matches: RawModelMatch[]; roadmapNote?: string } | null> {
   if (!config.apiKey) return null;
   const groq = getGroq(config.apiKey);
 
   const sys = buildTextSystemPrompt(rules, sector, rulebooks);
-  const user = buildTextUserPrompt(parsed, docLanguage);
+  const user = buildTextUserPrompt(parsed, docLanguage, userNotes);
 
   const resp = await groq.chat.completions.create({
     model: config.textModel,
@@ -326,7 +338,8 @@ async function callGroqVision(
   sector: Sector,
   docLanguage: DocLanguage,
   config: SectorConfig,
-  rulebooks: RulebookDoc[]
+  rulebooks: RulebookDoc[],
+  userNotes?: string
 ): Promise<{ matches: RawModelMatch[]; roadmapNote?: string } | null> {
   if (!config.apiKey) return null;
   if (!parsed.base64 || !parsed.mediaType) return null;
@@ -342,6 +355,10 @@ async function callGroqVision(
       ? "The document is in Hinglish."
       : "The document language is unknown — translate to English internally and add a roadmapNote.";
 
+  const notesBlock = userNotes && userNotes.trim().length > 0
+    ? `\n\nUSER-PROVIDED CONTEXT (read this BEFORE analysing — pay extra attention to anything the user flags here):\n${userNotes.trim()}`
+    : "";
+
   const dataUrl = `data:${parsed.mediaType};base64,${parsed.base64}`;
 
   const resp = await groq.chat.completions.create({
@@ -355,7 +372,7 @@ async function callGroqVision(
         content: [
           {
             type: "text",
-            text: `${langHint}\n\nAnalyse the contract in this image and return JSON as instructed.`,
+            text: `${langHint}${notesBlock}\n\nAnalyse the contract in this image and return JSON as instructed.`,
           },
           { type: "image_url", image_url: { url: dataUrl } },
         ],
@@ -418,10 +435,10 @@ const KEYWORDS_BY_RULE: Record<string, string[]> = {
   "GIG-NDA-005": ["confidential", "non-disclosure", "nda", "proprietary information"],
   "GIG-IP-006": ["intellectual property", "assignment of ip", "invention", "copyright", "patent", "work product"],
   "GIG-EXCLUSIVITY-007": ["exclusively", "exclusive", "shall not work", "other platform", "competitor platform"],
-  "GIG-DEBIT-008": ["auto debit", "auto-debit", "security deposit", "forfeit", "deduct", "shortfall"],
+  "GIG-DEBIT-008": ["auto debit", "auto-debit", "security deposit", "forfeit", "deduct", "shortfall", "onboarding fee", "processing fee", "deposit into the following account"],
   "GIG-DATA-009": ["personal data", "device access", "location", "biometric", "contacts", "monitor", "consent"],
   "GIG-JURIS-010": ["arbitration", "exclusive jurisdiction", "seat", "governing law", "courts of"],
-  "GIG-NOTICE-011": ["notice period", "notice of", "serve notice", "30 days", "60 days", "90 days"],
+  "GIG-NOTICE-011": ["notice period", "notice of", "serve notice", "30 days", "60 days", "90 days", "either party"],
   "GIG-SOCIAL-012": ["social media", "code of conduct", "public statement", "disparage", "criticism"],
 };
 
@@ -540,7 +557,8 @@ export async function runSectorPipeline(
             input.sector,
             input.docLanguage,
             config,
-            rulebooks
+            rulebooks,
+            input.userNotes
           );
         }
         return await callGroqText(
@@ -549,7 +567,8 @@ export async function runSectorPipeline(
           input.sector,
           input.docLanguage,
           config,
-          rulebooks
+          rulebooks,
+          input.userNotes
         );
       } catch (err) {
         return {
