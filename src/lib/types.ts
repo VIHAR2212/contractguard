@@ -44,12 +44,6 @@ export interface Rule {
 // ---------------------------------------------------------------------------
 // Pipeline output
 // ---------------------------------------------------------------------------
-// NOTE: The deep-research fields (chargeValidity, chargeAnalysisEn,
-// summarizedReasonEn, counterArgumentEn, precedentStrength, citedSections,
-// etc.) are OPTIONAL so that both the simple pipeline and the deep-research
-// pipeline can produce MatchedClause objects. The UI renders whichever
-// fields are present.
-// ---------------------------------------------------------------------------
 
 export interface MatchedClause {
   ruleId: string;
@@ -61,7 +55,6 @@ export interface MatchedClause {
   legalBasis: string;
   roadmapNote?: string;
 
-  // Deep-research fields — optional, populated by the deep-research pipeline
   chargeValidity?: ChargeValidity;
   chargeExtracted?: string;
   permittedCharge?: string;
@@ -73,6 +66,37 @@ export interface MatchedClause {
   counterArgumentHi?: string;
   precedentStrength?: PrecedentStrength;
   citedSections?: string[];
+
+  /** New: best-effort page or clause location where the match was found */
+  pageLocation?: string;
+  /** New: AI-extracted confidence indicator from Groq ("high" | "medium" | "low") */
+  extractionConfidence?: "high" | "medium" | "low";
+  /** New: AI-generated practical recommendation the user can act on */
+  recommendedActionEn?: string;
+  recommendedActionHi?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Document statistics — surfaced in the report for transparency
+// ---------------------------------------------------------------------------
+
+export interface DocumentStats {
+  /** estimated page count of the source document (text-based heuristic) */
+  estimatedPages: number;
+  /** total words extracted from the document */
+  wordCount: number;
+  /** total characters extracted */
+  charCount: number;
+  /** detected dominant language of the document (en/hi/hinglish) */
+  language: DocLanguage;
+  /** processing time in milliseconds (full pipeline, including parse) */
+  processingTimeMs: number;
+  /** how many chunks the document was split into for analysis */
+  chunksProcessed: number;
+  /** true if the source was a file upload, false if pasted text */
+  wasFileUpload: boolean;
+  /** original filename or "pasted.txt" */
+  filename: string;
 }
 
 export interface AnalyzeResponse {
@@ -87,6 +111,23 @@ export interface AnalyzeResponse {
   rulesFromSupabase?: number;
   rulebooksInjected?: number;
   keySource?: "construction" | "finance" | "gig_job" | "generic" | "none";
+  usedFallback?: boolean;
+
+  /** New: total rules in the sector DB (12 by default) */
+  rulesTotal: number;
+  /** New: rules that did NOT fire (rulesTotal - triggered) */
+  rulesPassed: number;
+  /** New: rules that triggered (clauses.length) */
+  rulesTriggered: number;
+  /** New: AI-generated 2-3 sentence executive summary of the document */
+  executiveSummaryEn?: string;
+  executiveSummaryHi?: string;
+  /** New: structured document statistics */
+  documentStats?: DocumentStats;
+  /** New: unique report ID for the PDF export (e.g. "CG-2026-07-04-A1B2") */
+  reportId?: string;
+  /** New: ISO timestamp the report was generated */
+  generatedAt?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,23 +191,22 @@ export interface UiStrings {
   report_back: string;
   report_download: string;
 
-  // Deep-research labels (optional in UI — used only if rendered)
-  report_charge_validity?: string;
-  report_charge_valid?: string;
-  report_charge_invalid?: string;
-  report_charge_partial?: string;
-  report_charge_na?: string;
-  report_charge_extracted?: string;
-  report_charge_permitted?: string;
-  report_charge_analysis?: string;
-  report_summarized_reason?: string;
-  report_counter_argument?: string;
-  report_cited_sections?: string;
-  report_precedent?: string;
-  report_precedent_statutory?: string;
-  report_precedent_binding?: string;
-  report_precedent_persuasive?: string;
-  report_precedent_regulatory?: string;
+  report_charge_validity: string;
+  report_charge_valid: string;
+  report_charge_invalid: string;
+  report_charge_partial: string;
+  report_charge_na: string;
+  report_charge_extracted: string;
+  report_charge_permitted: string;
+  report_charge_analysis: string;
+  report_summarized_reason: string;
+  report_counter_argument: string;
+  report_cited_sections: string;
+  report_precedent: string;
+  report_precedent_statutory: string;
+  report_precedent_binding: string;
+  report_precedent_persuasive: string;
+  report_precedent_regulatory: string;
 
   transparency_title: string;
   transparency_intro: string;
@@ -178,8 +218,8 @@ export interface UiStrings {
   transparency_ai_role_body: string;
   transparency_disclaimer_heading: string;
   transparency_disclaimer_body: string;
-  transparency_supabase_heading?: string;
-  transparency_supabase_body?: string;
+  transparency_supabase_heading: string;
+  transparency_supabase_body: string;
 
   lang_switch_label: string;
   footer_built: string;
