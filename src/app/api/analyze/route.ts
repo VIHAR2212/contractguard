@@ -4,8 +4,8 @@
 // ContractGuard — main analysis endpoint.
 //
 // Accepts two request shapes:
-//   (1) multipart/form-data — fields: file (File), sector, docLanguage, userNotes (optional)
-//   (2) application/json     — fields: pastedText, sector, docLanguage, userNotes (optional)
+//   (1) multipart/form-data — fields: file (File), sector, docLanguage
+//   (2) application/json     — fields: pastedText, sector, docLanguage
 //
 // Returns a strict AnalyzeResponse JSON object that the frontend renders
 // directly into the risk report.
@@ -20,15 +20,19 @@ import { parseFile, parsePastedText } from "@/lib/parsers";
 import { runSectorPipeline, computeRiskScore } from "@/lib/groq/sector-pipeline";
 
 export const runtime = "nodejs";
-export const maxDuration = 60; // NOTE: Vercel Hobby caps at 10s. Pro needed for 60s.
+// Allow larger uploads (Next.js default is 1 MB on the body parser for
+// serverless; the Node runtime can take more, but we cap explicitly).
+export const maxDuration = 60;
 
 const ALLOWED_SECTORS: Sector[] = ["construction", "finance", "gig-job"];
 const ALLOWED_LANGS: DocLanguage[] = ["en", "hi", "hinglish"];
-const MAX_BYTES = 25 * 1024 * 1024;
+
+const MAX_BYTES = 25 * 1024 * 1024; // 25 MB upload cap
 
 function isSector(v: string | null): v is Sector {
   return !!v && (ALLOWED_SECTORS as string[]).includes(v);
 }
+
 function isDocLanguage(v: string | null): v is DocLanguage {
   return !!v && (ALLOWED_LANGS as string[]).includes(v);
 }
@@ -44,23 +48,26 @@ function errorResponse(message: string, status = 400): NextResponse<AnalyzeRespo
       message,
       rulesConsidered: 0,
       pipelineMs: 0,
+      rulesTotal: 0,
+      rulesPassed: 0,
+      rulesTriggered: 0,
     },
     { status }
   );
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeResponse>> {
-  const startTime = Date.now();
   const contentType = req.headers.get("content-type") ?? "";
+
   let sector: Sector;
   let docLanguage: DocLanguage;
   let parsed;
   let userNotes = "";
 
   try {
-    // ------------------------------------------------------------------
-    // Parse input
-    // ------------------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Branch A: multipart/form-data (file upload)
+    // ---------------------------------------------------------------------
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
       const file = form.get("file");
@@ -81,18 +88,16 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
       if (!(file instanceof File)) {
         return errorResponse("No 'file' field found in multipart upload.");
       }
-      if (file.size === 0) {
-        return errorResponse("The uploaded file is empty (0 bytes). Please re-select the file and try again — some browsers lose the file reference when the page is reloaded.");
-      }
       if (file.size > MAX_BYTES) {
         return errorResponse(`File too large. Max ${MAX_BYTES / 1024 / 1024} MB.`);
       }
-      console.log(`[analyze] file="${file.name}" size=${file.size} sector=${sector} lang=${docLanguage}`);
       const arrayBuf = await file.arrayBuffer();
       const bytes = new Uint8Array(arrayBuf);
       parsed = await parseFile(bytes, file.name, file.type);
-      console.log(`[analyze] parsed kind=${parsed.kind} textLen=${parsed.text?.length ?? 0} in ${Date.now() - startTime}ms`);
     } else {
+      // ---------------------------------------------------------------------
+      // Branch B: JSON (pasted text)
+      // ---------------------------------------------------------------------
       const body = await req.json().catch(() => null) as
         | { pastedText?: string; sector?: string; docLanguage?: string; userNotes?: string }
         | null;
@@ -113,13 +118,12 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
       if (pastedText.length > 200_000) {
         return errorResponse("Pasted text is too long — at most 200,000 characters.");
       }
-      console.log(`[analyze] pasted text len=${pastedText.length} sector=${sector} lang=${docLanguage}`);
       parsed = parsePastedText(pastedText);
     }
 
-    // ------------------------------------------------------------------
-    // Check if we have extractable text
-    // ------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // Sanity: empty extraction
+    // -----------------------------------------------------------------------
     if (parsed.kind === "text" && (parsed.text ?? "").trim().length < 10) {
       return NextResponse.json<AnalyzeResponse>(
         {
@@ -128,55 +132,35 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
           clauses: [],
           sector,
           docLanguage,
-          message: "Could not extract enough text to analyse. If this is a scanned PDF, please upload as an image.",
+          message:
+            "We could not extract enough text to analyse. If this is a scanned PDF, please upload it as an image so the vision model can OCR it.",
           rulesConsidered: 0,
-          pipelineMs: Date.now() - startTime,
+          pipelineMs: 0,
+          rulesTotal: 0,
+          rulesPassed: 0,
+          rulesTriggered: 0,
         },
         { status: 200 }
       );
     }
 
-    // ------------------------------------------------------------------
-    // Handle PDFs/DOCX where text extraction failed
-    // ------------------------------------------------------------------
-    if (parsed.kind === "pdf_no_text") {
-      return NextResponse.json<AnalyzeResponse>(
-        {
-          status: "success",
-          riskScore: 0,
-          clauses: [],
-          sector,
-          docLanguage,
-          message: "This file has no extractable text layer (it's either scanned or uses custom font encoding the parser cannot decode). Please either: (1) paste the contract text manually using the paste mode, or (2) take a screenshot and upload it as an image — the vision model can OCR it.",
-          rulesConsidered: 0,
-          pipelineMs: Date.now() - startTime,
-        },
-        { status: 200 }
-      );
-    }
-
-    // ------------------------------------------------------------------
-    // Run the pipeline — with a hard 9-second budget on Vercel Hobby
-    // ------------------------------------------------------------------
-    const pipelinePromise = runSectorPipeline({ parsed, sector, docLanguage, userNotes });
-
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("PIPELINE_TIMEOUT_9S")), 9000)
-    );
-
-    let result;
-    try {
-      result = await Promise.race([pipelinePromise, timeoutPromise]);
-    } catch (timeoutErr) {
-      console.error(`[analyze] pipeline timed out at ${Date.now() - startTime}ms:`, (timeoutErr as Error).message);
-      return errorResponse(
-        "The analysis took too long and was aborted. This is usually because the Groq AI call exceeds Vercel's free-tier 10-second limit. Either upgrade to Vercel Pro (60s limit), or try pasting a shorter text snippet.",
-        504
-      );
-    }
-
+    // -----------------------------------------------------------------------
+    // Run the Groq pipeline
+    // -----------------------------------------------------------------------
+    const result = await runSectorPipeline({ parsed, sector, docLanguage, userNotes });
     const riskScore = computeRiskScore(result.clauses);
-    console.log(`[analyze] done in ${Date.now() - startTime}ms clauses=${result.clauses.length} score=${riskScore} fallback=${result.usedFallback} key=${result.keySource}`);
+
+    // Compute document statistics
+    const fullText = parsed.text ?? "";
+    const wordCount = fullText.trim() ? fullText.trim().split(/\s+/).length : 0;
+    const charCount = fullText.length;
+    const estimatedPages = Math.max(1, Math.ceil(charCount / 3000));
+    const wasFileUpload = contentType.includes("multipart/form-data");
+
+    // Generate a unique report ID — CG-YYYY-MM-DD-XXXX
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const randomSuffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+    const reportId = `CG-${dateStr}-${randomSuffix}`;
 
     const response: AnalyzeResponse = {
       status: "success",
@@ -185,26 +169,47 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
       sector,
       docLanguage,
       rulesConsidered: result.rulesConsidered,
-      pipelineMs: Date.now() - startTime,
+      pipelineMs: result.pipelineMs,
       message: [result.roadmapNote, ...parsed.warnings].filter(Boolean).join(" ") || undefined,
-      rulesFromSupabase: result.rulesFromSupabase,
-      rulebooksInjected: result.rulebooksInjected,
+      // New transparency fields
+      rulesTotal: result.rulesTotal,
+      rulesPassed: result.rulesPassed,
+      rulesTriggered: result.rulesTriggered,
+      executiveSummaryEn: result.executiveSummaryEn,
+      executiveSummaryHi: result.executiveSummaryHi,
+      documentStats: {
+        estimatedPages,
+        wordCount,
+        charCount,
+        language: docLanguage,
+        processingTimeMs: result.pipelineMs,
+        chunksProcessed: result.chunksProcessed,
+        wasFileUpload,
+        filename: parsed.filename,
+      },
+      reportId,
+      generatedAt: new Date().toISOString(),
+      usedFallback: result.usedFallback,
       keySource: result.keySource,
     };
     return NextResponse.json<AnalyzeResponse>(response, { status: 200 });
   } catch (err) {
-    console.error(`[analyze] FATAL error at ${Date.now() - startTime}ms:`, err);
-    return errorResponse(`Server error: ${(err as Error).message}`, 500);
+    console.error("[analyze] error", err);
+    return errorResponse(`Unexpected server error: ${(err as Error).message}`, 500);
   }
 }
 
 export async function GET(): Promise<NextResponse> {
-  return NextResponse.json({
-    ok: true,
-    endpoint: "/api/analyze",
-    methods: ["POST"],
-    sectors: ALLOWED_SECTORS,
-    docLanguages: ALLOWED_LANGS,
-    maxBytes: MAX_BYTES,
-  });
+  return NextResponse.json(
+    {
+      ok: true,
+      endpoint: "/api/analyze",
+      methods: ["POST"],
+      accepts: ["multipart/form-data", "application/json"],
+      sectors: ALLOWED_SECTORS,
+      docLanguages: ALLOWED_LANGS,
+      maxBytes: MAX_BYTES,
+    },
+    { status: 200 }
+  );
 }
