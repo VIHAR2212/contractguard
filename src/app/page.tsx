@@ -267,16 +267,18 @@ export default function Home() {
           {/* Left: brand — monochrome mark, no gradient */}
           <div className="flex items-center gap-2.5">
             <div
-              className="flex items-center justify-center"
+              className="flex items-center justify-center overflow-hidden"
               style={{
-                width: 28,
-                height: 28,
+                width: 30,
+                height: 30,
                 borderRadius: 8,
-                border: "1px solid #3a3a3a",
-                background: "#0a0a0a",
               }}
             >
-              <Shield style={{ width: 15, height: 15, color: "#e8e8e8" }} strokeWidth={1.5} />
+              <img
+                src="/logo.png"
+                alt="ContractGuard"
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
             </div>
             <span
               style={{
