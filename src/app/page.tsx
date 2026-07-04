@@ -1105,10 +1105,10 @@ function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; c
 // ===========================================================================
 
 // ===========================================================================
-// PDF export — generates a white-background, black-text PDF of the report
-// with colored severity indicators. Uses jsPDF (client-side, no server
-// needed). Font sizes chosen for readability: 12pt body, 18pt title,
-// 14pt section headings. About 8-10 words per line on A4.
+// PDF export — generates a designed, print-quality report with a cover
+// page (score dial, meta grid, severity summary, clause index), then
+// clean per-clause detail cards on following pages. Uses jsPDF
+// (client-side, no server needed).
 // ===========================================================================
 
 async function exportReportToPdf(result: AnalyzeResponse, uiLang: UiLanguage) {
@@ -1117,24 +1117,48 @@ async function exportReportToPdf(result: AnalyzeResponse, uiLang: UiLanguage) {
 
   const pageW = 210;
   const pageH = 297;
-  const margin = 18;
+  const margin = 20;
   const contentW = pageW - margin * 2;
   let y = margin;
 
-  // Severity colors (RGB) — muted but distinct, print-friendly
-  const SEV_RGB: Record<Severity, [number, number, number]> = {
-    high: [201, 130, 127],     // muted red
-    medium: [201, 171, 106],   // muted amber
-    low: [127, 157, 179],      // muted blue
-  };
-
   const isHindi = uiLang === "hi";
 
+  const INK: [number, number, number] = [15, 15, 17];
+  const SUBTLE: [number, number, number] = [70, 72, 78];
+  const FAINT: [number, number, number] = [95, 97, 103];
+  const RULE: [number, number, number] = [225, 226, 230];
+  const PAPER_TINT: [number, number, number] = [247, 247, 248];
+
+  const SEV_RGB: Record<Severity, [number, number, number]> = {
+    high: [196, 68, 68],
+    medium: [188, 132, 30],
+    low: [58, 120, 156],
+  };
+  const SEV_TINT: Record<Severity, [number, number, number]> = {
+    high: [250, 238, 238],
+    medium: [250, 244, 229],
+    low: [235, 244, 249],
+  };
+  const SEV_LABEL: Record<Severity, string> = { high: "HIGH", medium: "MEDIUM", low: "LOW" };
+
+  const tone =
+    result.riskScore >= 50
+      ? { label: "High risk", sub: "Significant issues found — review carefully before signing.", color: SEV_RGB.high }
+      : result.riskScore >= 20
+      ? { label: "Medium risk", sub: "Some clauses need attention before you proceed.", color: SEV_RGB.medium }
+      : { label: "Low risk", sub: "No major red flags detected in the clauses we checked.", color: [58, 138, 91] as [number, number, number] };
+
+  function newPage() {
+    doc.addPage();
+    y = margin;
+  }
+
   function ensureSpace(needed: number) {
-    if (y + needed > pageH - margin - 10) {
-      doc.addPage();
-      y = margin;
-    }
+    if (y + needed > pageH - margin - 14) newPage();
+  }
+
+  function clean(text: string) {
+    return text.replace(/\s+/g, " ").trim();
   }
 
   function addText(
@@ -1142,30 +1166,26 @@ async function exportReportToPdf(result: AnalyzeResponse, uiLang: UiLanguage) {
     opts: {
       size?: number;
       bold?: boolean;
+      font?: "helvetica" | "courier";
       color?: [number, number, number];
       x?: number;
       maxWidth?: number;
       lineHeight?: number;
     } = {}
   ) {
-    const size = opts.size ?? 12;
+    const size = opts.size ?? 11;
     const bold = opts.bold ?? false;
-    const color = opts.color ?? [40, 40, 40];
+    const font = opts.font ?? "helvetica";
+    const color = opts.color ?? INK;
     const x = opts.x ?? margin;
     const maxWidth = opts.maxWidth ?? contentW;
-    const lineHeight = opts.lineHeight ?? size * 0.5;
+    const lineHeight = opts.lineHeight ?? size * 0.5 + 1.2;
 
-    // CRITICAL: collapse all whitespace (including embedded newlines from
-    // PDF extraction) into single spaces. Without this, jsPDF's
-    // splitTextToSize treats \n as hard line breaks AND wraps by width,
-    // causing text to overlap.
-    const cleanText = text.replace(/\s+/g, " ").trim();
-
-    doc.setFont("helvetica", bold ? "bold" : "normal");
+    doc.setFont(font, bold ? "bold" : "normal");
     doc.setFontSize(size);
     doc.setTextColor(color[0], color[1], color[2]);
 
-    const lines = doc.splitTextToSize(cleanText, maxWidth) as string[];
+    const lines = doc.splitTextToSize(clean(text), maxWidth) as string[];
     for (const line of lines) {
       ensureSpace(lineHeight + 1);
       doc.text(line, x, y);
@@ -1173,225 +1193,355 @@ async function exportReportToPdf(result: AnalyzeResponse, uiLang: UiLanguage) {
     }
   }
 
-  function addSeparator() {
-    ensureSpace(6);
-    doc.setDrawColor(220, 220, 220);
-    doc.setLineWidth(0.3);
-    doc.line(margin, y, pageW - margin, y);
-    y += 5;
+  function measureLines(text: string, size: number, font: "helvetica" | "courier", maxWidth: number) {
+    doc.setFont(font, "normal");
+    doc.setFontSize(size);
+    return doc.splitTextToSize(clean(text), maxWidth) as string[];
   }
 
-  function addRect(
-    x: number,
-    yPos: number,
-    w: number,
-    h: number,
-    fill: [number, number, number],
-    radius: number = 2
-  ) {
+  function hr(color: [number, number, number] = RULE, weight = 0.3) {
+    ensureSpace(4);
+    doc.setDrawColor(color[0], color[1], color[2]);
+    doc.setLineWidth(weight);
+    doc.line(margin, y, pageW - margin, y);
+  }
+
+  function fillRect(x: number, yPos: number, w: number, h: number, fill: [number, number, number], radius = 2) {
     doc.setFillColor(fill[0], fill[1], fill[2]);
     doc.roundedRect(x, yPos, w, h, radius, radius, "F");
   }
 
-  // -----------------------------------------------------------------------
-  // HEADER
-  // -----------------------------------------------------------------------
-  // Title
-  addText("ContractGuard — Risk Report", { size: 20, bold: true, color: [20, 20, 20] });
-  y += 2;
-
-  // Subtitle with date
-  const dateStr = new Date().toLocaleDateString("en-IN", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-  addText(`Generated on ${dateStr}`, { size: 10, color: [140, 140, 140] });
-  y += 4;
-
-  // Risk score block
-  const tone =
-    result.riskScore >= 50
-      ? { label: "High risk", color: [201, 130, 127] as [number, number, number] }
-      : result.riskScore >= 20
-      ? { label: "Medium risk", color: [201, 171, 106] as [number, number, number] }
-      : { label: "Low risk", color: [127, 174, 142] as [number, number, number] };
-
-  addSeparator();
-
-  // Risk score number + label
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(36);
-  doc.setTextColor(20, 20, 20);
-  doc.text(String(result.riskScore), margin, y + 12);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(11);
-  doc.setTextColor(140, 140, 140);
-  doc.text("/ 100", margin + doc.getTextWidth(String(result.riskScore)) + 3, y + 12);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.setTextColor(tone.color[0], tone.color[1], tone.color[2]);
-  doc.text(tone.label, margin, y + 20);
-
-  // Risk score bar (colored)
-  const barY = y + 24;
-  const barH = 4;
-  const barW = contentW;
-  doc.setFillColor(235, 235, 235);
-  doc.roundedRect(margin, barY, barW, barH, 1.5, 1.5, "F");
-  doc.setFillColor(tone.color[0], tone.color[1], tone.color[2]);
-  const filledW = Math.max(barW * (result.riskScore / 100), 2);
-  doc.roundedRect(margin, barY, filledW, barH, 1.5, 1.5, "F");
-
-  y = barY + barH + 6;
-
-  // Meta info
-  addText(
-    `Sector: ${result.sector}    |    Document language: ${result.docLanguage}    |    Rules considered: ${result.rulesConsidered}    |    Analysis time: ${result.pipelineMs} ms`,
-    { size: 9, color: [140, 140, 140] }
-  );
-
-  if (result.message) {
-    y += 2;
-    addText(`Note: ${result.message}`, { size: 9, color: [180, 140, 60] });
+  function strokeRect(x: number, yPos: number, w: number, h: number, stroke: [number, number, number], radius = 2, weight = 0.3) {
+    doc.setDrawColor(stroke[0], stroke[1], stroke[2]);
+    doc.setLineWidth(weight);
+    doc.roundedRect(x, yPos, w, h, radius, radius, "S");
   }
 
-  y += 6;
-  addSeparator();
+  function drawFooter(pageIndex: number, totalPages: number) {
+    doc.setPage(pageIndex);
+    doc.setDrawColor(RULE[0], RULE[1], RULE[2]);
+    doc.setLineWidth(0.25);
+    doc.line(margin, pageH - 16, pageW - margin, pageH - 16);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(FAINT[0], FAINT[1], FAINT[2]);
+    doc.text("ContractGuard — AI-assisted contract review. Not legal advice.", margin, pageH - 10);
+    const pageLabel = `${pageIndex} / ${totalPages}`;
+    doc.text(pageLabel, pageW - margin, pageH - 10, { align: "right" });
+  }
 
-  // -----------------------------------------------------------------------
-  // CLAUSES
-  // -----------------------------------------------------------------------
-  addText(`Flagged clauses (${result.clauses.length})`, {
-    size: 16,
-    bold: true,
-    color: [20, 20, 20],
+  // ===========================================================================
+  // COVER PAGE
+  // ===========================================================================
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(INK[0], INK[1], INK[2]);
+  doc.text("ContractGuard", margin, y + 4);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(SUBTLE[0], SUBTLE[1], SUBTLE[2]);
+  const dateStr = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+  doc.text(dateStr, pageW - margin, y + 4, { align: "right" });
+  y += 10;
+  hr();
+  y += 12;
+
+  addText("Contract Risk Report", { size: 26, bold: true, color: INK });
+  y += 2;
+  addText(
+    "An automated read of this document against sector-specific consumer-protection rules. Use it to spot issues quickly — not as a substitute for legal advice.",
+    { size: 11, color: SUBTLE, lineHeight: 5.4 }
+  );
+  y += 8;
+
+  // Score dial + tone panel, side by side
+  const dialSize = 44;
+  const dialX = margin + dialSize / 2;
+  const dialYCenter = y + dialSize / 2;
+  const radius = dialSize / 2;
+
+  doc.setDrawColor(RULE[0], RULE[1], RULE[2]);
+  doc.setLineWidth(3.2);
+  doc.setLineCap("round");
+  doc.circle(dialX, dialYCenter, radius - 2, "S");
+
+  const pct = Math.max(0, Math.min(100, result.riskScore)) / 100;
+  const segments = 180;
+  const usedSegments = Math.max(1, Math.round(segments * pct));
+  doc.setDrawColor(tone.color[0], tone.color[1], tone.color[2]);
+  doc.setLineWidth(3.2);
+  doc.setLineCap("round");
+  let prevX = dialX + (radius - 2) * Math.cos(-Math.PI / 2);
+  let prevY = dialYCenter + (radius - 2) * Math.sin(-Math.PI / 2);
+  for (let i = 1; i <= usedSegments; i++) {
+    const a = -Math.PI / 2 + (i / segments) * Math.PI * 2;
+    const x1 = dialX + (radius - 2) * Math.cos(a);
+    const y1 = dialYCenter + (radius - 2) * Math.sin(a);
+    doc.line(prevX, prevY, x1, y1);
+    prevX = x1;
+    prevY = y1;
+  }
+  doc.setLineCap(0);
+
+  doc.setFont("courier", "bold");
+  doc.setFontSize(18);
+  doc.setTextColor(INK[0], INK[1], INK[2]);
+  const scoreText = String(result.riskScore);
+  doc.text(scoreText, dialX, dialYCenter + 2, { align: "center" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
+  doc.setTextColor(FAINT[0], FAINT[1], FAINT[2]);
+  const outOf = "/ 100";
+  doc.text(outOf, dialX, dialYCenter + 8, { align: "center" });
+
+  const toneX = margin + dialSize + 10;
+  const toneW = contentW - dialSize - 10;
+  const toneYStart = y;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.setTextColor(tone.color[0], tone.color[1], tone.color[2]);
+  doc.text(tone.label, toneX, toneYStart + 8);
+  const savedY = y;
+  y = toneYStart + 14;
+  addText(tone.sub, { size: 10.5, color: SUBTLE, x: toneX, maxWidth: toneW, lineHeight: 5 });
+  y = Math.max(y, savedY + dialSize);
+  y += 8;
+
+  // Meta grid
+  const metaItems: { label: string; value: string }[] = [
+    { label: "Sector", value: result.sector },
+    { label: "Language", value: result.docLanguage },
+    { label: "Rules Seen", value: String(result.rulesConsidered) },
+    { label: "Analysis time", value: `${result.pipelineMs} ms` },
+  ];
+  const cellGap = 6;
+  const cellW = (contentW - cellGap * 3) / 4;
+  const cellH = 20;
+  metaItems.forEach((m, i) => {
+    const cx = margin + i * (cellW + cellGap);
+    strokeRect(cx, y, cellW, cellH, RULE, 2, 0.3);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9.5);
+    doc.setTextColor(FAINT[0], FAINT[1], FAINT[2]);
+    doc.text(m.label.toUpperCase(), cx + 4, y + 6.5);
+    doc.setFont("courier", "bold");
+    doc.setFontSize(10.5);
+    doc.setTextColor(INK[0], INK[1], INK[2]);
+    const valLines = doc.splitTextToSize(m.value, cellW - 8) as string[];
+    doc.text(valLines[0] ?? "", cx + 4, y + 14.5);
   });
-  y += 4;
+  y += cellH + 10;
 
-  if (result.clauses.length === 0) {
-    addText(
-      "No high-risk clauses were matched. This is not legal advice — please have a lawyer review anything you're unsure about.",
-      { size: 11, color: [120, 120, 120] }
-    );
+  if (result.message) {
+    fillRect(margin, y, contentW, 12, PAPER_TINT, 2);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9.5);
+    doc.setTextColor(134, 90, 8);
+    const noteLines = doc.splitTextToSize(clean(result.message), contentW - 8) as string[];
+    doc.text(noteLines[0] ?? "", margin + 4, y + 7.5);
+    y += 16;
+  }
+
+  hr();
+  y += 8;
+
+  // Severity summary chips
+  const counts: Record<Severity, number> = { high: 0, medium: 0, low: 0 };
+  result.clauses.forEach((c) => { counts[c.severity] += 1; });
+
+  addText("Findings summary", { size: 12, bold: true, color: INK });
+  y += 2;
+
+  const sevOrder: Severity[] = ["high", "medium", "low"];
+  const chipGap = 6;
+  const chipW = (contentW - chipGap * 2) / 3;
+  const chipH = 18;
+  const chipPadR = 6;
+  sevOrder.forEach((sev, i) => {
+    const cx = margin + i * (chipW + chipGap);
+    fillRect(cx, y, chipW, chipH, SEV_TINT[sev], 2);
+    doc.setFont("courier", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(SEV_RGB[sev][0], SEV_RGB[sev][1], SEV_RGB[sev][2]);
+    doc.text(String(counts[sev]), cx + 6, y + 12);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(SEV_RGB[sev][0], SEV_RGB[sev][1], SEV_RGB[sev][2]);
+    doc.text(SEV_LABEL[sev], cx + chipW - chipPadR, y + 12, { align: "right" });
+  });
+  y += chipH + 10;
+
+  // Clause index
+  if (result.clauses.length > 0) {
+    hr();
+    y += 8;
+    addText(`Flagged clauses (${result.clauses.length})`, { size: 12, bold: true, color: INK });
+    y += 3;
+
+    result.clauses.forEach((c, i) => {
+      ensureSpace(7);
+      const sevColor = SEV_RGB[c.severity];
+      fillRect(margin, y - 3.2, 2.4, 5.5, sevColor, 0.6);
+      doc.setFont("courier", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(SUBTLE[0], SUBTLE[1], SUBTLE[2]);
+      doc.text(String(i + 1).padStart(2, "0"), margin + 6, y);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.setTextColor(INK[0], INK[1], INK[2]);
+      const labelLines = doc.splitTextToSize(c.category, contentW - 40) as string[];
+      doc.text(labelLines[0] ?? "", margin + 14, y);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(sevColor[0], sevColor[1], sevColor[2]);
+      doc.text(SEV_LABEL[c.severity], pageW - margin, y, { align: "right" });
+      y += 6.5;
+    });
   } else {
+    hr();
+    y += 8;
+    addText(
+      "No high-risk clauses were matched against our rule set for this sector. This does not guarantee the document is safe — please still have a lawyer review anything you're unsure about.",
+      { size: 11, color: SUBTLE, lineHeight: 5.3 }
+    );
+  }
+
+  // ===========================================================================
+  // CLAUSE DETAIL PAGES
+  // ===========================================================================
+  if (result.clauses.length > 0) {
+    newPage();
+    addText("Clause-by-clause detail", { size: 16, bold: true, color: INK });
+    y += 1;
+    addText("Each entry shows the exact text matched, why it's flagged, and the legal basis for the flag.", {
+      size: 10,
+      color: SUBTLE,
+    });
+    y += 6;
+    hr();
+    y += 8;
+
     result.clauses.forEach((c, i) => {
       const sevColor = SEV_RGB[c.severity];
+      const explanation = isHindi ? c.explanationHi : c.explanationEn;
 
-      // Clause header bar (colored severity indicator)
-      ensureSpace(14);
-      addRect(margin, y, 4, 10, sevColor, 1); // left severity bar
-      y += 2;
+      const snippetLines = measureLines(c.snippet, 10.5, "courier", contentW - 16);
+      const explanationLines = measureLines(explanation, 11.5, "helvetica", contentW - 4);
+      const legalLines = measureLines(c.legalBasis, 10.5, "helvetica", contentW - 4);
+      const roadmapLines = c.roadmapNote ? measureLines(c.roadmapNote, 9.5, "helvetica", contentW - 4) : [];
 
-      // Clause number + severity label + category
+      const cardH =
+        12 +
+        6 + snippetLines.length * 4.6 + 6 +
+        5 + explanationLines.length * 5.2 + 4 +
+        5 + legalLines.length * 4.6 + 4 +
+        (roadmapLines.length ? roadmapLines.length * 4.2 + 4 : 0) +
+        6;
+
+      ensureSpace(Math.min(cardH, pageH - margin * 2 - 14));
+
+      // Header row: index, severity chip, category, rule id
+      doc.setFont("courier", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(SUBTLE[0], SUBTLE[1], SUBTLE[2]);
+      doc.text(`CLAUSE ${String(i + 1).padStart(2, "0")}`, margin, y + 4);
+
+      const chipLabel = SEV_LABEL[c.severity];
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(11);
-      doc.setTextColor(80, 80, 80);
-      doc.text(`Clause ${String(i + 1).padStart(2, "0")}`, margin + 8, y + 3);
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(10);
+      doc.setFontSize(9);
+      const chipTextW = doc.getTextWidth(chipLabel);
+      const chipPad = 3;
+      const chipBoxW = chipTextW + chipPad * 2;
+      const chipX = margin + 32;
+      fillRect(chipX, y - 2.6, chipBoxW, 6, SEV_TINT[c.severity], 1.2);
       doc.setTextColor(sevColor[0], sevColor[1], sevColor[2]);
-      doc.text(c.severity.toUpperCase(), margin + 32, y + 3);
+      doc.text(chipLabel, chipX + chipPad, y + 2);
 
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.setTextColor(140, 140, 140);
-      doc.text(c.category, margin + 32 + 35, y + 3);
+      doc.setFontSize(9.5);
+      doc.setTextColor(SUBTLE[0], SUBTLE[1], SUBTLE[2]);
+      doc.text(c.category, chipX + chipBoxW + 6, y + 2);
 
-      // Rule ID (right-aligned)
       doc.setFont("courier", "normal");
       doc.setFontSize(9);
-      doc.setTextColor(140, 140, 140);
-      const ruleIdText = c.ruleId;
-      const ruleIdW = doc.getTextWidth(ruleIdText);
-      doc.text(ruleIdText, pageW - margin - ruleIdW, y + 3);
+      doc.setTextColor(FAINT[0], FAINT[1], FAINT[2]);
+      doc.text(c.ruleId, pageW - margin, y + 2, { align: "right" });
 
-      y += 8;
+      y += 9;
 
-      // Snippet label
-      addText("From the document:", {
-        size: 9,
-        bold: true,
-        color: [140, 140, 140],
-      });
-      y += 1;
+      // Snippet block
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(FAINT[0], FAINT[1], FAINT[2]);
+      doc.text("FROM THE DOCUMENT", margin, y);
+      y += 4;
 
-      // Snippet in a light grey box — sanitize whitespace first to prevent
-      // overlapping text from embedded newlines in the PDF extraction
-      const cleanSnippet = c.snippet.replace(/\s+/g, " ").trim();
-      const snippetFontSize = 10;
-      const snippetLineH = snippetFontSize * 0.5; // 5mm per line at 10pt
-      const snippetLines = doc.splitTextToSize(cleanSnippet, contentW - 8) as string[];
-      const snippetBoxH = snippetLines.length * snippetLineH + 6;
-      ensureSpace(snippetBoxH + 6);
-      doc.setFillColor(248, 248, 248);
-      doc.roundedRect(margin, y, contentW, snippetBoxH, 2, 2, "F");
+      const snippetBoxH = snippetLines.length * 4.6 + 6;
+      fillRect(margin, y, contentW, snippetBoxH, PAPER_TINT, 2);
+      strokeRect(margin, y, contentW, snippetBoxH, RULE, 2, 0.25);
       doc.setFont("courier", "normal");
-      doc.setFontSize(snippetFontSize);
-      doc.setTextColor(50, 50, 50);
-      let snippetY = y + 4.5;
+      doc.setFontSize(9.5);
+      doc.setTextColor(35, 35, 38);
+      let sy = y + 5.2;
       for (const line of snippetLines) {
-        doc.text(line, margin + 4, snippetY);
-        snippetY += snippetLineH;
+        doc.text(line, margin + 5, sy);
+        sy += 4.6;
       }
-      y += snippetBoxH + 4;
+      y += snippetBoxH + 6;
 
       // Explanation
-      addText("Explanation:", {
-        size: 9,
-        bold: true,
-        color: [140, 140, 140],
-      });
-      y += 1;
-      const explanation = isHindi ? c.explanationHi : c.explanationEn;
-      addText(explanation, { size: 11, color: [40, 40, 40], lineHeight: 5.5 });
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(FAINT[0], FAINT[1], FAINT[2]);
+      doc.text("WHY THIS MATTERS", margin, y);
+      y += 4.5;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(11.5);
+      doc.setTextColor(INK[0], INK[1], INK[2]);
+      for (const line of explanationLines) {
+        doc.text(line, margin, y);
+        y += 5.2;
+      }
       y += 3;
 
       // Legal basis
-      addText("Legal basis:", {
-        size: 9,
-        bold: true,
-        color: [140, 140, 140],
-      });
-      y += 1;
-      addText(c.legalBasis, { size: 10, color: [100, 100, 160], lineHeight: 5 });
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(FAINT[0], FAINT[1], FAINT[2]);
+      doc.text("LEGAL BASIS", margin, y);
+      y += 4.5;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.setTextColor(40, 44, 92);
+      for (const line of legalLines) {
+        doc.text(line, margin, y);
+        y += 4.6;
+      }
 
-      // Roadmap note (if any)
       if (c.roadmapNote) {
-        y += 2;
-        addText(`Note: ${c.roadmapNote}`, { size: 9, color: [180, 140, 60] });
+        y += 3;
+        doc.setFont("helvetica", "italic");
+        doc.setFontSize(9.5);
+        doc.setTextColor(134, 90, 8);
+        for (const line of roadmapLines) {
+          doc.text(line, margin, y);
+          y += 4.2;
+        }
       }
 
       y += 6;
 
-      // Separator between clauses
       if (i < result.clauses.length - 1) {
-        addSeparator();
-        y += 2;
+        hr();
+        y += 7;
       }
     });
   }
 
-  // -----------------------------------------------------------------------
-  // FOOTER on every page
-  // -----------------------------------------------------------------------
-  const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p++) {
-    doc.setPage(p);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
-    doc.setTextColor(160, 160, 160);
-    doc.text(
-      "ContractGuard — AI contract review. This report is not legal advice. Consult a qualified advocate for your specific situation.",
-      margin,
-      pageH - 10
-    );
-    doc.text(`Page ${p} of ${pageCount}`, pageW - margin - 20, pageH - 10);
-  }
+  // Footer stamped on every page once total is known
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) drawFooter(p, totalPages);
 
-  // Save
   const filename = `contractguard-report-${new Date().toISOString().slice(0, 10)}.pdf`;
   doc.save(filename);
 }
