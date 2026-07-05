@@ -150,7 +150,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
     const result = await runSectorPipeline({ parsed, sector, docLanguage, userNotes });
     const riskScore = computeRiskScore(result.clauses);
 
-    // Compute document statistics
+    // Compute document statistics for the transparency panel
     const fullText = parsed.text ?? "";
     const wordCount = fullText.trim() ? fullText.trim().split(/\s+/).length : 0;
     const charCount = fullText.length;
