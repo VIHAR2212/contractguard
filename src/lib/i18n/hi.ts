@@ -92,6 +92,27 @@ export const hi: UiStrings = {
     "कॉन्ट्रैक्टगार्ड एक सूचना उपकरण है। यह योग्य अधिवक्ता से सलाह का विकल्प नहीं है। यदि कोई मेल खाई धारा किसी वास्तविक लेन-देन को प्रभावित करती है, तो कृपया बार काउंसिल ऑफ़ इंडिया के पास पंजीकृत वकील से सलाह लें।",
 
   // misc
+  report_charge_validity: "शुल्क वैधता",
+  report_charge_valid: "वैध",
+  report_charge_invalid: "अवैध",
+  report_charge_partial: "आंशिक रूप से वैध",
+  report_charge_na: "लागू नहीं",
+  report_charge_extracted: "अनुबंध क्या कहता है",
+  report_charge_permitted: "कानून क्या अनुमति देता है",
+  report_charge_analysis: "शुल्क सत्यापन",
+  report_summarized_reason: "निचली रेखा",
+  report_counter_argument: "यह वापस भेजें",
+  report_cited_sections: "उद्धृत धाराएँ",
+  report_precedent: "नज़ीर की ताकत",
+  report_precedent_statutory: "वैधानिक",
+  report_precedent_binding: "बाध्यकारी (SC)",
+  report_precedent_persuasive: "प्रेरक (HC)",
+  report_precedent_regulatory: "विनियामक",
+
+  transparency_supabase_heading: "भारतीय कानून के पूर्ण पाठ द्वारा समर्थित",
+  transparency_supabase_body:
+    "कॉन्ट्रैक्टगार्ड Supabase रूलबुक डेटाबेस से वास्तविक वैधानिक पाठ — RERA अधिनियम, RBI मास्टर निर्देश, BIS हॉलमार्किंग विनियम — पढ़ता है। हर शुल्क सत्यापन विशिष्ट धारा का हवाला देता है।",
+
   lang_switch_label: "इंटरफ़ेस भाषा",
   footer_built: "भारतीय उपभोक्ताओं के लिए बनाया गया · RERA · RBI · BIS · ICA",
 };
