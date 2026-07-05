@@ -55,23 +55,23 @@ export interface MatchedClause {
   legalBasis: string;
   roadmapNote?: string;
 
-  chargeValidity?: ChargeValidity;
+  chargeValidity: ChargeValidity;
   chargeExtracted?: string;
   permittedCharge?: string;
-  chargeAnalysisEn?: string;
-  chargeAnalysisHi?: string;
-  summarizedReasonEn?: string;
-  summarizedReasonHi?: string;
-  counterArgumentEn?: string;
-  counterArgumentHi?: string;
-  precedentStrength?: PrecedentStrength;
-  citedSections?: string[];
+  chargeAnalysisEn: string;
+  chargeAnalysisHi: string;
+  summarizedReasonEn: string;
+  summarizedReasonHi: string;
+  counterArgumentEn: string;
+  counterArgumentHi: string;
+  precedentStrength: PrecedentStrength;
+  citedSections: string[];
 
-  /** New: best-effort page or clause location where the match was found */
+  /** best-effort page or clause location where the match was found */
   pageLocation?: string;
-  /** New: AI-extracted confidence indicator from Groq ("high" | "medium" | "low") */
+  /** AI-extracted confidence indicator ("high" | "medium" | "low") */
   extractionConfidence?: "high" | "medium" | "low";
-  /** New: AI-generated practical recommendation the user can act on */
+  /** AI-generated practical recommendation the user can act on */
   recommendedActionEn?: string;
   recommendedActionHi?: string;
 }
@@ -113,20 +113,20 @@ export interface AnalyzeResponse {
   keySource?: "construction" | "finance" | "gig_job" | "generic" | "none";
   usedFallback?: boolean;
 
-  /** New: total rules in the sector DB (12 by default) */
+  /** total rules in the sector DB */
   rulesTotal: number;
-  /** New: rules that did NOT fire (rulesTotal - triggered) */
+  /** rules that did NOT fire (rulesTotal - triggered) */
   rulesPassed: number;
-  /** New: rules that triggered (clauses.length) */
+  /** rules that triggered (clauses.length) */
   rulesTriggered: number;
-  /** New: AI-generated 2-3 sentence executive summary of the document */
+  /** AI-generated 2-3 sentence executive summary of the document */
   executiveSummaryEn?: string;
   executiveSummaryHi?: string;
-  /** New: structured document statistics */
+  /** structured document statistics */
   documentStats?: DocumentStats;
-  /** New: unique report ID for the PDF export (e.g. "CG-2026-07-04-A1B2") */
+  /** unique report ID for the PDF export (e.g. "CG-2026-07-04-A1B2") */
   reportId?: string;
-  /** New: ISO timestamp the report was generated */
+  /** ISO timestamp the report was generated */
   generatedAt?: string;
 }
 
