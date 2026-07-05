@@ -1415,7 +1415,7 @@ export default function Home() {
                 marginBottom: 16,
               }}
             >
-              ContractGuard vs ChatGPT
+              ContractGuard vs Any ChatBot
             </h2>
             <p
               style={{
@@ -1480,7 +1480,7 @@ export default function Home() {
                   borderLeft: "1px solid #242424",
                 }}
               >
-                ChatGPT
+                ChatBot
               </div>
             </div>
 
