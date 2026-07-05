@@ -1286,7 +1286,7 @@ export default function Home() {
             {[
               { icon: Upload, label: "Upload", sub: "PDF · DOCX · image · paste" },
               { icon: FileSearch, label: "Extract", sub: "text + structure" },
-              { icon: Layers, label: "Rules DB", sub: "36 sector rules" },
+              { icon: Layers, label: "Rules DB", sub: "200 rules / Sector" },
               { icon: Sparkles, label: "Sector AI", sub: "Groq + rulebook" },
               { icon: Zap, label: "Risk Detection", sub: "match + score" },
               { icon: FileText, label: "Report", sub: "PDF + report ID" },
