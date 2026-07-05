@@ -10,10 +10,18 @@
 // from the up-wind edge) or leaving (exiting off the down-wind edge) —
 // there is no static resting state.
 //
+// A minority of papers are flagged as "fraud" papers and render in a
+// transparent red instead of the neutral grey — a visual metaphor for
+// "some contracts hide something risky in the pile." This is the one
+// deliberate exception to the "no color" rule below: red here still
+// means risk/severity, consistent with how the app uses red everywhere
+// else, it's just happening in the ambient background instead of a
+// clause card.
+//
 // Design constraints carried over from page.tsx's own documented system:
-//   - No color. Papers are drawn in the same neutral grey / off-white
-//     values already used in globals.css (#e8e8e8, #9a9a9a, #6b6b6b).
-//     Color in this app means clause severity — nothing else.
+//   - No color *except* the red fraud accent described above. Non-fraud
+//     papers are still drawn in the same neutral grey / off-white values
+//     already used in globals.css (#e8e8e8, #9a9a9a, #6b6b6b).
 //   - Very low opacity. This is atmosphere behind the content, not a
 //     second thing competing for attention with the report.
 //   - `prefers-reduced-motion: reduce` disables the whole effect — no
@@ -38,6 +46,7 @@ interface Paper {
   wobbleFreq: number; // radians / sec
   wobblePhase: number;
   opacity: number;
+  isFraud: boolean; // true -> render in transparent red instead of grey
 }
 
 // Wind blows down-and-right, with a slow drift in the exact angle so the
@@ -45,10 +54,17 @@ interface Paper {
 const BASE_WIND_ANGLE = (28 * Math.PI) / 180;
 const ANGLE_DRIFT = (7 * Math.PI) / 180;
 
+// Roughly 1 in every 4-6 papers is a "fraud" paper. Expressed as a
+// probability range so it stays roughly proportional as more papers
+// are added, rather than a fixed count that would go stale.
+const FRAUD_RATIO_MIN = 1 / 6;
+const FRAUD_RATIO_MAX = 1 / 4;
+const FRAUD_RATIO = (FRAUD_RATIO_MIN + FRAUD_RATIO_MAX) / 2; // ~0.208
+
 function countForWidth(width: number): number {
-  if (width < 480) return 8;
-  if (width < 900) return 12;
-  return 18;
+  if (width < 480) return 16;
+  if (width < 900) return 24;
+  return 36;
 }
 
 function makePaper(width: number, height: number, spawnEdgeOnly: boolean): Paper {
@@ -85,6 +101,7 @@ function makePaper(width: number, height: number, spawnEdgeOnly: boolean): Paper
     wobbleFreq: 0.25 + Math.random() * 0.35,
     wobblePhase: Math.random() * Math.PI * 2,
     opacity: 0.045 + depth * 0.12,
+    isFraud: Math.random() < FRAUD_RATIO,
   };
 }
 
@@ -94,16 +111,27 @@ function drawPaper(ctx: CanvasRenderingContext2D, p: Paper, windStrength: number
   ctx.translate(p.x, p.y);
   ctx.rotate(p.rotation);
 
+  // Palette switches on isFraud — everything else about the shape,
+  // silhouette, and fold is identical so the fraud papers read as
+  // "one of these, but wrong" rather than a different object entirely.
+  const bodyColor = p.isFraud ? "#c44444" : "#e8e8e8";
+  const borderColor = p.isFraud ? "#e08a8a" : "#9a9a9a";
+  const lineColor = p.isFraud ? "#e0a0a0" : "#6b6b6b";
+  // Fraud red is a slightly stronger signal than the neutral grey so it
+  // still reads as "flagged" at a glance, without becoming a second
+  // focal point competing with real clause cards.
+  const alphaMul = p.isFraud ? 1.6 : 1;
+
   // Body
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = "#e8e8e8";
+  ctx.globalAlpha = alpha * alphaMul;
+  ctx.fillStyle = bodyColor;
   ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
 
   // Hairline border, slightly stronger than the fill so the silhouette
   // reads even at very low opacity — matches the app's own hairline
   // border language (#242424 / #3a3a3a) rather than a glow or shadow.
-  ctx.globalAlpha = Math.min(1, alpha * 1.8);
-  ctx.strokeStyle = "#9a9a9a";
+  ctx.globalAlpha = Math.min(1, alpha * 1.8 * alphaMul);
+  ctx.strokeStyle = borderColor;
   ctx.lineWidth = 1;
   ctx.strokeRect(-p.w / 2, -p.h / 2, p.w, p.h);
 
@@ -115,15 +143,15 @@ function drawPaper(ctx: CanvasRenderingContext2D, p: Paper, windStrength: number
   ctx.lineTo(p.w / 2, -p.h / 2);
   ctx.lineTo(p.w / 2, -p.h / 2 + fold);
   ctx.closePath();
-  ctx.globalAlpha = Math.min(1, alpha * 2.2);
-  ctx.fillStyle = "#000000";
+  ctx.globalAlpha = Math.min(1, alpha * 2.2 * alphaMul);
+  ctx.fillStyle = p.isFraud ? "#7a1f1f" : "#000000";
   ctx.fill();
   ctx.stroke();
 
   // A few faint text lines — implies a printed contract without ever
   // drawing (or claiming to draw) real text.
-  ctx.globalAlpha = Math.min(1, alpha * 1.3);
-  ctx.strokeStyle = "#6b6b6b";
+  ctx.globalAlpha = Math.min(1, alpha * 1.3 * alphaMul);
+  ctx.strokeStyle = lineColor;
   ctx.lineWidth = 1;
   const lineCount = 3;
   for (let i = 0; i < lineCount; i++) {
