@@ -92,6 +92,27 @@ export const en: UiStrings = {
     "ContractGuard is an information tool. It is not a substitute for advice from a qualified advocate. If a matched clause affects a real transaction, please consult a lawyer registered with the Bar Council of India.",
 
   // misc
+  report_charge_validity: "Charge validity",
+  report_charge_valid: "Valid",
+  report_charge_invalid: "Invalid",
+  report_charge_partial: "Partially valid",
+  report_charge_na: "Not applicable",
+  report_charge_extracted: "What the contract says",
+  report_charge_permitted: "What the law permits",
+  report_charge_analysis: "Charge validation",
+  report_summarized_reason: "The bottom line",
+  report_counter_argument: "Send this back",
+  report_cited_sections: "Cited sections",
+  report_precedent: "Precedent strength",
+  report_precedent_statutory: "Statutory",
+  report_precedent_binding: "Binding (SC)",
+  report_precedent_persuasive: "Persuasive (HC)",
+  report_precedent_regulatory: "Regulatory",
+
+  transparency_supabase_heading: "Backed by the full text of Indian law",
+  transparency_supabase_body:
+    "ContractGuard reads the actual statutory text — RERA Act, RBI Master Directions, BIS Hallmarking Regulations — from a Supabase rulebook database. Every charge validation cites the specific section.",
+
   lang_switch_label: "Interface language",
   footer_built: "Built for Indian consumers · RERA · RBI · BIS · ICA",
 };
