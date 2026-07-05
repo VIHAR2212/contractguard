@@ -92,6 +92,27 @@ export const hinglish: UiStrings = {
     "ContractGuard ek information tool hai. Ye qualified advocate ki advice ka substitute nahi hai. Agar koi matched clause real transaction ko affect karta hai, to please Bar Council of India ke paas registered lawyer se consult karo.",
 
   // misc
+  report_charge_validity: "Charge validity",
+  report_charge_valid: "Valid",
+  report_charge_invalid: "Invalid",
+  report_charge_partial: "Partially valid",
+  report_charge_na: "Not applicable",
+  report_charge_extracted: "Contract kya kehta hai",
+  report_charge_permitted: "Law kya allow karta hai",
+  report_charge_analysis: "Charge validation",
+  report_summarized_reason: "Bottom line",
+  report_counter_argument: "Ye wapas bhejo",
+  report_cited_sections: "Cited sections",
+  report_precedent: "Precedent strength",
+  report_precedent_statutory: "Statutory",
+  report_precedent_binding: "Binding (SC)",
+  report_precedent_persuasive: "Persuasive (HC)",
+  report_precedent_regulatory: "Regulatory",
+
+  transparency_supabase_heading: "Indian law ke full text se backed",
+  transparency_supabase_body:
+    "ContractGuard Supabase rulebook database se actual statutory text — RERA Act, RBI Master Directions, BIS Hallmarking Regulations — padhta hai. Har charge validation specific section cite karta hai.",
+
   lang_switch_label: "Interface language",
   footer_built: "Indian consumers ke liye banaya · RERA · RBI · BIS · ICA",
 };
